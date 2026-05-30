@@ -19,13 +19,49 @@ export default function AuthPage() {
   const [registerAge, setRegisterAge] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const { signIn, signUp, user, loading: authLoading } = useAuth();
+  const { signIn, signUp, user, loading: authLoading, isConfigured } = useAuth();
   const router = useRouter();
 
   // Redirect if already logged in
   if (!authLoading && user) {
     router.push("/dashboard");
     return null;
+  }
+
+  // Show configuration message if Firebase is not set up
+  if (!authLoading && !isConfigured) {
+    return (
+      <div className="flex min-h-screen flex-col bg-primary">
+        <div className="flex flex-col items-center pt-12 pb-8 px-6">
+          <div className="font-serif text-4xl text-primary-foreground">
+            Lipid<span className="text-warning">Life</span>
+          </div>
+        </div>
+        <div className="flex-1 rounded-t-3xl bg-background px-6 pt-6 pb-8">
+          <Card className="mx-auto max-w-md">
+            <CardHeader>
+              <CardTitle className="text-center">Configuration Required</CardTitle>
+              <CardDescription className="text-center">
+                Firebase is not configured. Please add the following environment variables to your Vercel project:
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ul className="list-disc pl-6 text-sm text-muted-foreground flex flex-col gap-1">
+                <li>NEXT_PUBLIC_FIREBASE_API_KEY</li>
+                <li>NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN</li>
+                <li>NEXT_PUBLIC_FIREBASE_PROJECT_ID</li>
+                <li>NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET</li>
+                <li>NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID</li>
+                <li>NEXT_PUBLIC_FIREBASE_APP_ID</li>
+              </ul>
+              <p className="mt-4 text-sm text-muted-foreground">
+                Get these values from your Firebase Console under Project Settings.
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
   }
 
   const handleLogin = async (e: React.FormEvent) => {

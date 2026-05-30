@@ -15,13 +15,14 @@ import {
   type User,
 } from "firebase/auth";
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
-import { auth, db } from "@/lib/firebase";
+import { auth, db, isFirebaseConfigured } from "@/lib/firebase";
 import type { UserProfile } from "@/lib/types";
 
 interface AuthContextType {
   user: User | null;
   profile: UserProfile | null;
   loading: boolean;
+  isConfigured: boolean;
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (
     email: string,
@@ -41,6 +42,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   const loadProfile = async (uid: string) => {
+    if (!db) return;
     try {
       const snap = await getDoc(doc(db, "users", uid));
       if (snap.exists()) {
@@ -55,6 +57,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
+    if (!auth || !isFirebaseConfigured) {
+      setLoading(false);
+      return;
+    }
+
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setUser(firebaseUser);
       if (firebaseUser) {
@@ -69,6 +76,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signIn = async (email: string, password: string) => {
+    if (!auth) throw new Error("Firebase not configured");
     await signInWithEmailAndPassword(auth, email, password);
   };
 
@@ -78,6 +86,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     name: string,
     age: number
   ) => {
+    if (!auth || !db) throw new Error("Firebase not configured");
     const cred = await createUserWithEmailAndPassword(auth, email, password);
     await setDoc(doc(db, "users", cred.user.uid), {
       name,
@@ -97,6 +106,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = async () => {
+    if (!auth) return;
     await firebaseSignOut(auth);
     setUser(null);
     setProfile(null);
@@ -114,6 +124,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user,
         profile,
         loading,
+        isConfigured: isFirebaseConfigured,
         signIn,
         signUp,
         signOut,
