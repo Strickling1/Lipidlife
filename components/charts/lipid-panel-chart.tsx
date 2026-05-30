@@ -85,9 +85,9 @@ export function LipidPanelChart({ labResult, targetLDL }: LipidPanelChartProps) 
                   borderRadius: "8px",
                   fontSize: "12px",
                 }}
-                formatter={(value: number, name: string, props: { payload: { target: number } }) => [
-                  `${value} mg/dL (Target: ${props.payload.target})`,
-                  name,
+                formatter={(value, name, props) => [
+                  `${value} mg/dL (Target: ${(props as { payload: { target: number } }).payload.target})`,
+                  String(name),
                 ]}
               />
               <Bar dataKey="value" radius={[0, 4, 4, 0]}>

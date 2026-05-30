@@ -77,7 +77,7 @@ export function AdherenceChart({ data }: AdherenceChartProps) {
                   borderRadius: "8px",
                   fontSize: "12px",
                 }}
-                formatter={(value: number) => [`${value}%`, "Adherence"]}
+                formatter={(value) => [`${value}%`, "Adherence"]}
               />
               <Area
                 type="monotone"

@@ -71,7 +71,7 @@ export default function FoodDiaryPage() {
   const [saving, setSaving] = useState(false);
 
   const loadEntries = useCallback(async () => {
-    if (!user) return;
+    if (!user || !db) return;
     const weekAgo = subDays(new Date(), 7).toISOString().split("T")[0];
     const q = query(
       collection(db, "foodEntries"),
@@ -101,7 +101,7 @@ export default function FoodDiaryPage() {
       setError("Please enter at least one food item.");
       return;
     }
-    if (!user) return;
+    if (!user || !db) return;
     setSaving(true);
 
     const foodsList = form.foods.split(",").map((f) => f.trim()).filter(Boolean);
@@ -129,6 +129,7 @@ export default function FoodDiaryPage() {
   };
 
   const handleDelete = async (id: string) => {
+    if (!db) return;
     if (!confirm("Delete this entry?")) return;
     await deleteDoc(doc(db, "foodEntries", id));
     await loadEntries();

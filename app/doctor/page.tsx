@@ -52,6 +52,11 @@ export default function DoctorDashboard() {
       return;
     }
     
+    if (!auth) {
+      setError("Firebase is not configured.");
+      return;
+    }
+    
     setLoading(true);
     try {
       await signInWithEmailAndPassword(auth, email, password);
@@ -64,6 +69,7 @@ export default function DoctorDashboard() {
   };
 
   const loadPatients = async () => {
+    if (!db) return;
     const usersSnap = await getDocs(collection(db, "users"));
     const patientList: (UserProfile & { latestLab?: LabResult })[] = [];
     
@@ -90,6 +96,7 @@ export default function DoctorDashboard() {
   };
 
   const selectPatient = async (patient: UserProfile & { latestLab?: LabResult }) => {
+    if (!db) return;
     // Load all labs for this patient
     const labsQ = query(collection(db, "labResults"), orderBy("testDate", "desc"));
     const labsSnap = await getDocs(labsQ);
@@ -101,7 +108,7 @@ export default function DoctorDashboard() {
   };
 
   const handleLogout = async () => {
-    await firebaseSignOut(auth);
+    if (auth) await firebaseSignOut(auth);
     setIsLoggedIn(false);
     setPatients([]);
     setSelectedPatient(null);

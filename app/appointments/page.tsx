@@ -88,7 +88,7 @@ export default function AppointmentsPage() {
   const [saving, setSaving] = useState(false);
 
   const loadAppointments = useCallback(async () => {
-    if (!user) return;
+    if (!user || !db) return;
     const q = query(
       collection(db, "appointments"),
       where("userId", "==", user.uid),
@@ -122,7 +122,7 @@ export default function AppointmentsPage() {
       setError("Please fill title, date and time.");
       return;
     }
-    if (!user) return;
+    if (!user || !db) return;
     setSaving(true);
 
     const dateTime = new Date(`${form.date}T${form.time}`);
@@ -163,11 +163,13 @@ export default function AppointmentsPage() {
   };
 
   const handleComplete = async (appt: Appointment) => {
+    if (!db) return;
     await updateDoc(doc(db, "appointments", appt.id), { completed: true });
     await loadAppointments();
   };
 
   const handleDelete = async (id: string) => {
+    if (!db) return;
     if (!confirm("Delete this appointment?")) return;
     await deleteDoc(doc(db, "appointments", id));
     await loadAppointments();

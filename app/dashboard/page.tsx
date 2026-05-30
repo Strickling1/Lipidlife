@@ -61,7 +61,7 @@ export default function DashboardPage() {
   const [labSaving, setLabSaving] = useState(false);
 
   const loadLabResults = useCallback(async () => {
-    if (!user) return;
+    if (!user || !db) return;
     const q = query(
       collection(db, "labResults"),
       where("userId", "==", user.uid),
@@ -72,7 +72,7 @@ export default function DashboardPage() {
   }, [user]);
 
   const loadTaskLog = useCallback(async () => {
-    if (!user) return;
+    if (!user || !db) return;
     const today = new Date().toISOString().split("T")[0];
     const q = query(
       collection(db, "taskLog"),
@@ -84,7 +84,7 @@ export default function DashboardPage() {
   }, [user]);
 
   const loadStreak = useCallback(async () => {
-    if (!user) return;
+    if (!user || !db) return;
     const q = query(
       collection(db, "taskLog"),
       where("userId", "==", user.uid),
@@ -120,7 +120,7 @@ export default function DashboardPage() {
   }, [user, loadLabResults, loadTaskLog, loadStreak]);
 
   const handleCompleteTask = async (taskId: string, taskName: string, points: number) => {
-    if (!user || taskLog.find((t) => t.taskId === taskId)) return;
+    if (!user || !db || taskLog.find((t) => t.taskId === taskId)) return;
     const today = new Date().toISOString().split("T")[0];
     await addDoc(collection(db, "taskLog"), {
       userId: user.uid,
@@ -144,7 +144,7 @@ export default function DashboardPage() {
       setLabError("Please fill all required fields.");
       return;
     }
-    if (!user) return;
+    if (!user || !db) return;
     setLabSaving(true);
     try {
       await addDoc(collection(db, "labResults"), {

@@ -74,7 +74,7 @@ export default function MedicationsPage() {
   const [adherenceData, setAdherenceData] = useState<{ date: string; adherence: number }[]>([]);
 
   const loadMedications = useCallback(async () => {
-    if (!user) return;
+    if (!user || !db) return;
     const q = query(
       collection(db, "medications"),
       where("userId", "==", user.uid),
@@ -86,7 +86,7 @@ export default function MedicationsPage() {
   }, [user]);
 
   const loadTodayLogs = useCallback(async () => {
-    if (!user) return;
+    if (!user || !db) return;
     const today = startOfDay(new Date());
     const q = query(
       collection(db, "medicationLogs"),
@@ -98,7 +98,7 @@ export default function MedicationsPage() {
   }, [user]);
 
   const loadAdherenceHistory = useCallback(async () => {
-    if (!user || medications.length === 0) return;
+    if (!user || !db || medications.length === 0) return;
     // Calculate adherence for last 7 days
     const data: { date: string; adherence: number }[] = [];
     for (let i = 6; i >= 0; i--) {
@@ -148,7 +148,7 @@ export default function MedicationsPage() {
       setError("Please fill name and dosage.");
       return;
     }
-    if (!user) return;
+    if (!user || !db) return;
     setSaving(true);
     try {
       if (editingMed) {
@@ -190,6 +190,7 @@ export default function MedicationsPage() {
   };
 
   const handleDelete = async (medId: string) => {
+    if (!db) return;
     if (!confirm("Delete this medication?")) return;
     await deleteDoc(doc(db, "medications", medId));
     await loadMedications();
@@ -197,7 +198,7 @@ export default function MedicationsPage() {
   };
 
   const handleTakeMedication = async (med: Medication) => {
-    if (!user) return;
+    if (!user || !db) return;
     const alreadyTaken = todayLogs.find((l) => l.medicationId === med.id && !l.skipped);
     if (alreadyTaken) return;
     await addDoc(collection(db, "medicationLogs"), {

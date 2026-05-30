@@ -62,14 +62,14 @@ export function PatientLDLChart({ labResults, targetLDL }: PatientLDLChartProps)
                   fontSize: "12px",
                 }}
                 labelStyle={{ fontWeight: 600 }}
-                formatter={(value: number, name: string) => {
+                formatter={(value, name) => {
                   const labels: Record<string, string> = {
                     ldl: "LDL",
                     hdl: "HDL",
                     tc: "Total Chol.",
                     tg: "Triglycerides",
                   };
-                  return [`${value} mg/dL`, labels[name] || name];
+                  return [`${value} mg/dL`, labels[String(name)] || String(name)];
                 }}
               />
               <ReferenceLine
