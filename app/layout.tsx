@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { DM_Sans, DM_Serif_Display } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/lib/auth-context";
+import { Toaster } from "sonner";
 
 const dmSans = DM_Sans({
   subsets: ["latin"],
@@ -47,6 +48,7 @@ export default function RootLayout({
     >
       <body className="font-sans antialiased">
         <AuthProvider>{children}</AuthProvider>
+        <Toaster position="top-center" richColors />
       </body>
     </html>
   );

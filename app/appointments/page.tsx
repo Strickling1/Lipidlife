@@ -37,6 +37,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { BottomNav } from "@/components/bottom-nav";
+import { NotificationSettings } from "@/components/notification-settings";
+import { scheduleAppointmentReminder } from "@/lib/notifications";
+import { toast } from "sonner";
 import {
   Plus,
   Calendar,
@@ -147,6 +150,9 @@ export default function AppointmentsPage() {
           completed: false,
           createdAt: serverTimestamp(),
         });
+        // Schedule push notification reminder (24h before)
+        scheduleAppointmentReminder(form.provider || form.title, dateTime);
+        toast.success("Appointment scheduled!");
       }
       await loadAppointments();
       closeModal();
@@ -229,6 +235,9 @@ export default function AppointmentsPage() {
             <Plus className="size-4" />
             Schedule Appointment
           </Button>
+
+          {/* Notification Settings */}
+          <NotificationSettings />
 
           {/* Upcoming */}
           <div className="flex flex-col gap-3">

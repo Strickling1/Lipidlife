@@ -38,6 +38,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { BottomNav } from "@/components/bottom-nav";
+import { AdherenceChart } from "@/components/charts/adherence-chart";
+import { NotificationSettings } from "@/components/notification-settings";
+import { scheduleMedicationReminder } from "@/lib/notifications";
+import { toast } from "sonner";
 import {
   Plus,
   Check,
@@ -67,6 +71,7 @@ export default function MedicationsPage() {
   });
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [adherenceData, setAdherenceData] = useState<{ date: string; adherence: number }[]>([]);
 
   const loadMedications = useCallback(async () => {
     if (!user) return;
@@ -92,6 +97,32 @@ export default function MedicationsPage() {
     setTodayLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() } as MedicationLog)));
   }, [user]);
 
+  const loadAdherenceHistory = useCallback(async () => {
+    if (!user || medications.length === 0) return;
+    // Calculate adherence for last 7 days
+    const data: { date: string; adherence: number }[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date();
+      date.setDate(date.getDate() - i);
+      const dateStr = format(date, "yyyy-MM-dd");
+      const dayStart = startOfDay(date);
+      const dayEnd = new Date(dayStart);
+      dayEnd.setDate(dayEnd.getDate() + 1);
+
+      const q = query(
+        collection(db, "medicationLogs"),
+        where("userId", "==", user.uid),
+        where("takenAt", ">=", dayStart),
+        where("takenAt", "<", dayEnd)
+      );
+      const snap = await getDocs(q);
+      const takenCount = snap.docs.filter((d) => !d.data().skipped).length;
+      const adherence = medications.length > 0 ? Math.round((takenCount / medications.length) * 100) : 0;
+      data.push({ date: dateStr, adherence });
+    }
+    setAdherenceData(data);
+  }, [user, medications]);
+
   useEffect(() => {
     if (!loading && !user) {
       router.push("/");
@@ -104,6 +135,12 @@ export default function MedicationsPage() {
       loadTodayLogs();
     }
   }, [user, loadMedications, loadTodayLogs]);
+
+  useEffect(() => {
+    if (medications.length > 0) {
+      loadAdherenceHistory();
+    }
+  }, [medications, loadAdherenceHistory]);
 
   const handleSave = async () => {
     setError("");
@@ -134,6 +171,15 @@ export default function MedicationsPage() {
           active: true,
           createdAt: serverTimestamp(),
         });
+        // Schedule reminder if notifications enabled
+        const timeMap: Record<string, string> = {
+          morning: "08:00",
+          afternoon: "13:00",
+          evening: "18:00",
+          bedtime: "21:00",
+        };
+        scheduleMedicationReminder(form.name, timeMap[form.timeOfDay]);
+        toast.success(`${form.name} added successfully`);
       }
       await loadMedications();
       closeModal();
@@ -250,7 +296,15 @@ export default function MedicationsPage() {
                 {takenCount} of {medications.length} medications taken today
               </p>
             </CardContent>
-          </Card>
+</Card>
+
+          {/* Adherence Chart */}
+          {adherenceData.length > 0 && (
+            <AdherenceChart data={adherenceData} />
+          )}
+
+          {/* Notification Settings */}
+          <NotificationSettings />
 
           {/* Add Button */}
           <Button onClick={() => setAddModalOpen(true)} className="w-full">
