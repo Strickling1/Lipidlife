@@ -1,0 +1,1064 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#0F1F3D">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="LipidLife">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>LipidLife — Cholesterol Coach</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
+
+<!-- Firebase SDK -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword,
+           signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+  import { getFirestore, doc, setDoc, getDoc, collection, addDoc,
+           query, where, orderBy, getDocs, updateDoc, serverTimestamp }
+    from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+  // ── PASTE YOUR FIREBASE CONFIG HERE ──────────────────────────
+  const firebaseConfig = {
+    apiKey: "AIzaSyDU7uatGGBfo0de_1aCo28tWGydNfS9z5M",
+    authDomain: "lipidlife.firebaseapp.com",
+    projectId: "lipidlife",
+    storageBucket: "lipidlife.firebasestorage.app",
+    messagingSenderId: "795549551612",
+    appId: "1:795549551612:web:aa8ebb7204019271604079"
+  };
+  // ─────────────────────────────────────────────────────────────
+
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+
+  // ── Global state ─────────────────────────────────────────────
+  let currentUser = null;
+  let userProfile = null;
+  let labResults = [];
+  let taskLog = [];
+
+  // ── Auth state listener ──────────────────────────────────────
+  onAuthStateChanged(auth, async (user) => {
+    if (user) {
+      currentUser = user;
+      await loadUserProfile();
+      await loadLabResults();
+      await loadTaskLog();
+      showApp();
+    } else {
+      currentUser = null;
+      userProfile = null;
+      showAuth();
+    }
+  });
+
+  // ── Auth functions ───────────────────────────────────────────
+  window.doLogin = async () => {
+    const email = document.getElementById('login-email').value.trim();
+    const pass  = document.getElementById('login-pass').value;
+    const err   = document.getElementById('login-error');
+    err.textContent = '';
+    try {
+      await signInWithEmailAndPassword(auth, email, pass);
+    } catch(e) {
+      err.textContent = 'Incorrect email or password.';
+    }
+  };
+
+  window.doRegister = async () => {
+    const name  = document.getElementById('reg-name').value.trim();
+    const email = document.getElementById('reg-email').value.trim();
+    const pass  = document.getElementById('reg-pass').value;
+    const age   = parseInt(document.getElementById('reg-age').value);
+    const err   = document.getElementById('reg-error');
+    err.textContent = '';
+    if (!name || !email || !pass || !age) { err.textContent = 'Please fill all fields.'; return; }
+    try {
+      const cred = await createUserWithEmailAndPassword(auth, email, pass);
+      await setDoc(doc(db, 'users', cred.user.uid), {
+        name, email, age,
+        diabetes: false, smoker: false, familyHistory: false, hypertension: false,
+        targetLDL: 100, riskCategory: 'Moderate',
+        cardiologist: 'Dr. Khalid Hassan',
+        programStartDate: new Date().toISOString().split('T')[0],
+        createdAt: serverTimestamp()
+      });
+    } catch(e) {
+      err.textContent = e.message.includes('email-already') ? 'Email already registered.' : 'Registration failed.';
+    }
+  };
+
+  window.doLogout = async () => {
+    await signOut(auth);
+  };
+
+  // ── Data loaders ─────────────────────────────────────────────
+  async function loadUserProfile() {
+    const snap = await getDoc(doc(db, 'users', currentUser.uid));
+    if (snap.exists()) {
+      userProfile = snap.data();
+    } else {
+      userProfile = { name: currentUser.email, targetLDL: 100, riskCategory: 'Moderate' };
+    }
+  }
+
+  async function loadLabResults() {
+    const q = query(
+      collection(db, 'labResults'),
+      where('userId', '==', currentUser.uid),
+      orderBy('testDate', 'desc')
+    );
+    const snap = await getDocs(q);
+    labResults = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  }
+
+  async function loadTaskLog() {
+    const today = new Date().toISOString().split('T')[0];
+    const q = query(
+      collection(db, 'taskLog'),
+      where('userId', '==', currentUser.uid),
+      where('date', '==', today)
+    );
+    const snap = await getDocs(q);
+    taskLog = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  }
+
+  async function loadStreakDays() {
+    const q = query(
+      collection(db, 'taskLog'),
+      where('userId', '==', currentUser.uid),
+      orderBy('date', 'desc')
+    );
+    const snap = await getDocs(q);
+    const dates = [...new Set(snap.docs.map(d => d.data().date))].sort().reverse();
+    let streak = 0;
+    const today = new Date().toISOString().split('T')[0];
+    let check = today;
+    for (const d of dates) {
+      if (d === check) {
+        streak++;
+        const dt = new Date(check);
+        dt.setDate(dt.getDate() - 1);
+        check = dt.toISOString().split('T')[0];
+      } else break;
+    }
+    return streak;
+  }
+
+  // ── Save lab result ──────────────────────────────────────────
+  window.saveLabResult = async () => {
+    const ldl  = parseFloat(document.getElementById('f-ldl').value);
+    const hdl  = parseFloat(document.getElementById('f-hdl').value);
+    const tc   = parseFloat(document.getElementById('f-tc').value);
+    const tg   = parseFloat(document.getElementById('f-tg').value);
+    const date = document.getElementById('f-date').value;
+    const note = document.getElementById('f-note').value;
+    const err  = document.getElementById('lab-error');
+    if (!ldl || !hdl || !tc || !tg || !date) { err.textContent = 'Please fill all required fields.'; return; }
+    err.textContent = '';
+    const btn = document.getElementById('save-lab-btn');
+    btn.textContent = 'Saving…'; btn.disabled = true;
+    try {
+      await addDoc(collection(db, 'labResults'), {
+        userId: currentUser.uid,
+        ldl, hdl, totalCholesterol: tc, triglycerides: tg,
+        testDate: date, notes: note,
+        ldlStatus: ldl > (userProfile?.targetLDL || 100) ? 'Above Target' : 'On Target',
+        createdAt: serverTimestamp()
+      });
+      await loadLabResults();
+      renderDashboard();
+      closeModal('modal-lab');
+      showToast('Lab result saved ✓');
+    } catch(e) {
+      err.textContent = 'Error saving. Please try again.';
+    }
+    btn.textContent = 'Save Result'; btn.disabled = false;
+  };
+
+  // ── Complete task ────────────────────────────────────────────
+  window.completeTask = async (taskId, taskName, pts, el) => {
+    const already = taskLog.find(t => t.taskId === taskId);
+    if (already) return;
+    el.classList.add('done');
+    el.querySelector('.task-check').classList.add('done');
+    el.querySelector('.task-check').innerHTML = '✓';
+    el.querySelector('.task-text').classList.add('done');
+    const today = new Date().toISOString().split('T')[0];
+    await addDoc(collection(db, 'taskLog'), {
+      userId: currentUser.uid, taskId, taskName,
+      date: today, completed: true, pointsEarned: pts,
+      createdAt: serverTimestamp()
+    });
+    taskLog.push({ taskId, taskName, date: today, completed: true, pointsEarned: pts });
+    updateTaskProgress();
+    showToast(`+${pts} pts — great habit!`);
+  };
+
+  // ── Render functions ─────────────────────────────────────────
+  function showAuth() {
+    document.getElementById('auth-screen').style.display = 'flex';
+    document.getElementById('app-screen').style.display = 'none';
+  }
+
+  async function showApp() {
+    document.getElementById('auth-screen').style.display = 'none';
+    document.getElementById('app-screen').style.display = 'flex';
+    renderDashboard();
+  }
+
+  async function renderDashboard() {
+    if (!userProfile) return;
+    // Name
+    const first = (userProfile.name || '').split(' ')[0];
+    document.getElementById('dash-name').innerHTML = `${first} <span style="color:var(--amber)">${(userProfile.name||'').split(' ').slice(1).join(' ')}</span>`;
+    // Risk
+    document.getElementById('risk-cat').textContent = userProfile.riskCategory || 'Moderate';
+    document.getElementById('target-ldl').textContent = userProfile.targetLDL || 100;
+    // Latest labs
+    if (labResults.length > 0) {
+      const latest = labResults[0];
+      document.getElementById('val-ldl').textContent = latest.ldl || '—';
+      document.getElementById('val-hdl').textContent = latest.hdl || '—';
+      document.getElementById('val-tg').textContent  = latest.triglycerides || '—';
+      document.getElementById('val-tc').textContent  = latest.totalCholesterol || '—';
+      document.getElementById('ldl-status').textContent = latest.ldl > (userProfile.targetLDL||100) ? 'Above target' : 'On target';
+      document.getElementById('ldl-status').className = 'chol-card-status ' + (latest.ldl > (userProfile.targetLDL||100) ? 'status-high' : 'status-ok');
+      document.getElementById('lab-date').textContent = 'Latest: ' + (latest.testDate || '');
+      renderTrend();
+    } else {
+      document.getElementById('val-ldl').textContent = '—';
+      document.getElementById('val-hdl').textContent = '—';
+      document.getElementById('val-tg').textContent  = '—';
+      document.getElementById('val-tc').textContent  = '—';
+      document.getElementById('lab-date').textContent = 'No results yet — add your first';
+    }
+    // Streak
+    const streak = await loadStreakDays();
+    document.getElementById('streak-num').textContent = streak;
+    // Tasks
+    updateTaskProgress();
+    // Risk ring
+    const riskMap = { 'Low': 5, 'Moderate': 12, 'High': 18, 'Very High': 28 };
+    const riskPct = riskMap[userProfile.riskCategory] || 12;
+    document.getElementById('ring-pct').textContent = riskPct + '%';
+    const circ = 226;
+    const offset = circ - (circ * (riskPct / 40));
+    document.getElementById('risk-ring').setAttribute('stroke-dashoffset', offset);
+    const goalPct = labResults.length > 0
+      ? Math.min(100, Math.round(((labResults[labResults.length-1]?.ldl||200) - (labResults[0]?.ldl||200)) / ((labResults[labResults.length-1]?.ldl||200) - (userProfile.targetLDL||100)) * 100))
+      : 0;
+    document.getElementById('ring-goal-pct').textContent = Math.max(0, goalPct) + '%';
+  }
+
+  function renderTrend() {
+    const sorted = [...labResults].sort((a,b) => a.testDate > b.testDate ? 1 : -1).slice(-5);
+    if (sorted.length < 2) return;
+    const container = document.getElementById('trend-bars');
+    const maxVal = Math.max(...sorted.map(r => r.ldl));
+    const target = userProfile?.targetLDL || 100;
+    container.innerHTML = sorted.map((r, i) => {
+      const h = Math.round((r.ldl / (maxVal * 1.1)) * 64);
+      const color = r.ldl <= target ? '#4CAF82' : i === sorted.length-1 ? '#2EB8A6' : '#F5A623';
+      const mon = new Date(r.testDate).toLocaleString('default', {month:'short'});
+      return `<div class="t-bar-wrap">
+        <div class="t-bar-val">${r.ldl}</div>
+        <div class="t-bar" style="height:${h}px;background:${color}"></div>
+        <div class="t-bar-label">${mon}</div>
+      </div>`;
+    }).join('');
+    const diff = sorted[0].ldl - sorted[sorted.length-1].ldl;
+    document.getElementById('trend-badge').textContent = diff > 0 ? `▼ ${diff} mg/dL since start` : diff < 0 ? `▲ ${Math.abs(diff)} mg/dL` : 'Stable';
+  }
+
+  function updateTaskProgress() {
+    const tasks = document.querySelectorAll('.task-item');
+    const completedIds = taskLog.map(t => t.taskId);
+    let done = 0;
+    tasks.forEach(t => {
+      const tid = t.dataset.taskid;
+      if (completedIds.includes(tid)) {
+        t.classList.add('done');
+        t.querySelector('.task-check').classList.add('done');
+        t.querySelector('.task-check').innerHTML = '✓';
+        t.querySelector('.task-text').classList.add('done');
+        done++;
+      }
+    });
+    const total = tasks.length;
+    const pct = total > 0 ? (done / total) * 100 : 0;
+    const fill = document.querySelector('.task-progress-fill');
+    if (fill) fill.style.width = pct + '%';
+    const txt = document.querySelector('.task-progress-text');
+    if (txt) txt.textContent = `${done} of ${total} done`;
+  }
+
+  // ── Risk calculator ──────────────────────────────────────────
+  window.updateCalc = () => {
+    const age = parseInt(document.getElementById('c-age')?.value || 52);
+    const ldl = parseInt(document.getElementById('c-ldl')?.value || 148);
+    const bp  = parseInt(document.getElementById('c-bp')?.value  || 138);
+    const hdl = parseInt(document.getElementById('c-hdl')?.value || 44);
+    const dia = document.getElementById('t-diabetes')?.classList.contains('on');
+    const smk = document.getElementById('t-smoke')?.classList.contains('on');
+    const fam = document.getElementById('t-family')?.classList.contains('on');
+    document.getElementById('c-age-v').textContent = age;
+    document.getElementById('c-ldl-v').textContent = ldl + ' mg/dL';
+    document.getElementById('c-bp-v').textContent  = bp + ' mmHg';
+    document.getElementById('c-hdl-v').textContent = hdl + ' mg/dL';
+    let score = (age - 40) * 0.18 + (ldl - 100) * 0.04 + (bp - 120) * 0.08 - (hdl - 40) * 0.06;
+    if (dia) score += 2.5; if (smk) score += 3; if (fam) score += 1.5;
+    score = Math.max(1, Math.min(40, Math.round(score)));
+    document.getElementById('risk-number').textContent = score;
+    const dim = 'rgba(255,255,255,0.15)';
+    const tiers = ['tier1','tier2','tier3','tier4'];
+    const colors = ['#4CAF82','#F5A623','#E8705A','#C0392B'];
+    const active = score < 5 ? 1 : score < 10 ? 2 : score < 20 ? 3 : 4;
+    tiers.forEach((t,i) => {
+      document.getElementById(t).style.background = i < active ? colors[i] : dim;
+    });
+    const adv = document.getElementById('risk-advice');
+    if (score < 5)       adv.innerHTML = 'Low risk. Lifestyle alone can keep you here. LDL target: &lt;<strong>116 mg/dL</strong>.';
+    else if (score < 10) adv.innerHTML = 'Moderate risk. Lifestyle change can reduce this by <strong>30–40%</strong>. LDL target: &lt;<strong>100 mg/dL</strong>.';
+    else if (score < 20) adv.innerHTML = 'High risk. Medication alongside lifestyle likely needed. LDL target: &lt;<strong>70 mg/dL</strong>.';
+    else                 adv.innerHTML = 'Very high risk. Aggressive treatment required. LDL target: &lt;<strong>55 mg/dL</strong>. Consult your cardiologist.';
+  };
+
+  window.toggleCalcBtn = (el) => { el.classList.toggle('on'); window.updateCalc(); };
+
+  // ── Expose to global ─────────────────────────────────────────
+  window._auth = auth;
+  window._db   = db;
+  window._currentUser = () => currentUser;
+</script>
+
+<style>
+:root {
+  --navy:#0F1F3D; --navy-mid:#1A3260; --navy-light:#243F78;
+  --amber:#F5A623; --teal:#2EB8A6; --coral:#E8705A;
+  --green:#4CAF82; --cream:#FDF8F0; --cream2:#F5EFE3;
+  --text-main:#0F1F3D; --text-muted:#7A8BA8; --text-light:#B0BED0;
+  --screen-bg:#F0EBE1; --radius:20px; --radius-sm:12px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bot: env(safe-area-inset-bottom, 0px);
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden;font-family:'DM Sans',sans-serif;background:#0F1F3D}
+
+/* ── Auth screen ── */
+#auth-screen{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  height:100%;background:var(--navy);padding:24px;
+}
+.auth-logo{font-family:'DM Serif Display',serif;font-size:36px;color:#fff;margin-bottom:4px}
+.auth-logo span{color:var(--amber)}
+.auth-sub{font-size:13px;color:var(--text-light);margin-bottom:36px;text-align:center}
+.auth-card{background:#fff;border-radius:24px;padding:28px;width:100%;max-width:360px}
+.auth-tabs{display:flex;gap:0;margin-bottom:24px;background:var(--screen-bg);border-radius:10px;padding:3px}
+.auth-tab{flex:1;text-align:center;padding:8px;font-size:13px;font-weight:500;
+  border-radius:8px;cursor:pointer;color:var(--text-muted);transition:all 0.2s;border:none;background:none}
+.auth-tab.active{background:#fff;color:var(--navy);font-weight:600;box-shadow:0 1px 4px rgba(0,0,0,0.1)}
+.auth-panel{display:none}.auth-panel.active{display:block}
+.auth-input{width:100%;padding:12px 14px;border:1.5px solid #E8E4DC;border-radius:10px;
+  font-size:14px;font-family:'DM Sans',sans-serif;outline:none;margin-bottom:10px;
+  color:var(--text-main);transition:border-color 0.2s}
+.auth-input:focus{border-color:var(--navy)}
+.auth-btn{width:100%;padding:14px;background:var(--navy);color:#fff;border:none;
+  border-radius:10px;font-size:14px;font-weight:600;font-family:'DM Sans',sans-serif;
+  cursor:pointer;margin-top:4px;transition:opacity 0.2s}
+.auth-btn:hover{opacity:0.9}
+.auth-error{font-size:12px;color:var(--coral);margin-top:6px;min-height:16px}
+
+/* ── App shell ── */
+#app-screen{
+  display:none;flex-direction:column;height:100%;
+  padding-top:var(--safe-top);padding-bottom:var(--safe-bot);
+}
+.screen{display:none;flex-direction:column;flex:1;overflow:hidden;background:var(--screen-bg)}
+.screen.active{display:flex}
+.scroll-area{flex:1;overflow-y:auto;overflow-x:hidden;scrollbar-width:none}
+.scroll-area::-webkit-scrollbar{display:none}
+
+/* ── Status bar ── */
+.status-bar{display:flex;justify-content:space-between;align-items:center;
+  padding:10px 20px;font-size:12px;font-weight:600;color:#fff;background:var(--navy);flex-shrink:0}
+
+/* ── Nav bar ── */
+.nav-bar{display:flex;background:var(--navy);padding:8px 0 12px;flex-shrink:0}
+.nav-item{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;
+  cursor:pointer;opacity:0.4;transition:opacity 0.2s;border:none;background:none}
+.nav-item.active{opacity:1}
+.nav-icon{font-size:22px;line-height:1}
+.nav-label{font-size:10px;font-weight:500;color:#fff;letter-spacing:0.3px}
+
+/* ── Dashboard header ── */
+.dash-header{background:var(--navy);padding:4px 20px 20px;color:#fff;flex-shrink:0}
+.dash-greeting{font-size:13px;color:var(--text-light);margin-bottom:3px}
+.dash-name{font-family:'DM Serif Display',serif;font-size:26px;color:#fff}
+
+/* ── Risk ring card ── */
+.risk-ring-section{background:var(--navy);padding:0 20px 24px;flex-shrink:0}
+.risk-ring-card{background:var(--navy-light);border-radius:20px;padding:18px 20px;
+  display:flex;align-items:center;gap:16px;border:1px solid rgba(255,255,255,0.08)}
+.ring-wrap{position:relative;width:88px;height:88px;flex-shrink:0}
+.ring-wrap svg{transform:rotate(-90deg)}
+.ring-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.ring-pct{font-size:20px;font-weight:600;color:#fff;line-height:1}
+.ring-sub{font-size:9px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.5px;margin-top:2px}
+.risk-info{flex:1}
+.risk-label{font-size:11px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.8px;font-weight:500;margin-bottom:4px}
+.risk-tier{display:inline-block;margin-top:5px;background:rgba(245,166,35,0.2);
+  color:var(--amber);font-size:11px;font-weight:600;padding:3px 10px;border-radius:20px}
+.risk-desc{font-size:12px;color:var(--text-light);margin-top:5px}
+
+/* ── Scroll content ── */
+.scroll-content{padding:16px;display:flex;flex-direction:column;gap:14px}
+.section-title{font-size:11px;font-weight:600;text-transform:uppercase;
+  letter-spacing:1px;color:var(--text-muted)}
+
+/* ── Streak ── */
+.streak-card{background:var(--navy-light);border-radius:var(--radius-sm);padding:14px 16px;
+  display:flex;align-items:center;gap:14px;border:1px solid rgba(255,255,255,0.08)}
+.streak-icon{font-size:28px}
+.streak-num{font-family:'DM Serif Display',serif;font-size:28px;color:var(--amber);line-height:1}
+.streak-label{font-size:12px;color:var(--text-light)}
+
+/* ── Chol grid ── */
+.chol-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.chol-card{background:#fff;border-radius:var(--radius-sm);padding:14px}
+.chol-card-label{font-size:10px;color:var(--text-muted);font-weight:500;text-transform:uppercase;letter-spacing:0.4px}
+.chol-card-val{font-family:'DM Serif Display',serif;font-size:28px;color:var(--text-main);margin:4px 0 2px;line-height:1}
+.chol-card-unit{font-size:10px;color:var(--text-muted)}
+.chol-card-status{display:inline-block;margin-top:6px;font-size:10px;font-weight:600;padding:2px 8px;border-radius:20px}
+.status-high{background:#FEEAE8;color:#C0392B}
+.status-ok{background:#E8F8F0;color:#27814F}
+.status-warn{background:#FEF5E7;color:#9E6A0A}
+.lab-date-row{font-size:11px;color:var(--text-muted);text-align:right}
+
+/* ── Trend ── */
+.trend-card{background:#fff;border-radius:var(--radius-sm);padding:14px}
+.trend-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.trend-title{font-size:14px;font-weight:600;color:var(--text-main)}
+.trend-badge{font-size:11px;color:var(--teal);font-weight:600}
+.trend-bars{display:flex;align-items:flex-end;gap:8px;height:64px}
+.t-bar-wrap{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px}
+.t-bar{width:100%;border-radius:4px 4px 0 0}
+.t-bar-label{font-size:9px;color:var(--text-muted)}
+.t-bar-val{font-size:9px;font-weight:600;color:var(--text-main)}
+.no-data-hint{font-size:12px;color:var(--text-muted);text-align:center;padding:20px 0}
+
+/* ── Add result btn ── */
+.add-lab-btn{background:var(--navy);color:#fff;border:none;border-radius:10px;
+  padding:12px;font-size:13px;font-weight:600;font-family:'DM Sans',sans-serif;
+  cursor:pointer;width:100%;margin-top:4px}
+
+/* ── Tasks ── */
+.task-card{background:#fff;border-radius:var(--radius-sm);overflow:hidden}
+.task-header{padding:14px 16px 10px;display:flex;justify-content:space-between;align-items:center}
+.task-progress-text{font-size:11px;color:var(--text-muted)}
+.task-progress-bar{height:3px;background:var(--cream2)}
+.task-progress-fill{height:100%;background:var(--green);border-radius:2px;transition:width 0.4s}
+.task-item{display:flex;align-items:center;gap:12px;padding:12px 16px;
+  border-top:1px solid #F0EBE1;cursor:pointer;transition:opacity 0.2s}
+.task-item.done{opacity:0.6}
+.task-check{width:22px;height:22px;border-radius:50%;border:2px solid var(--text-light);
+  flex-shrink:0;display:flex;align-items:center;justify-content:center;
+  font-size:12px;color:#fff;transition:all 0.2s}
+.task-check.done{background:var(--green);border-color:var(--green)}
+.task-text{font-size:13px;color:var(--text-main);flex:1;line-height:1.3}
+.task-text.done{text-decoration:line-through;color:var(--text-muted)}
+.task-pts{font-size:11px;color:var(--amber);font-weight:600}
+
+/* ── Learn ── */
+.learn-hero{background:var(--navy);padding:4px 20px 20px;flex-shrink:0}
+.learn-hero h1{font-family:'DM Serif Display',serif;font-size:26px;color:#fff;margin-bottom:4px}
+.learn-hero p{font-size:13px;color:var(--text-light)}
+.learn-body{padding:16px;display:flex;flex-direction:column;gap:12px}
+.module-card{background:#fff;border-radius:var(--radius-sm);overflow:hidden}
+.module-color-bar{height:4px}
+.module-inner{padding:14px 16px}
+.module-tag{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-muted);margin-bottom:5px}
+.module-title{font-size:15px;font-weight:600;color:var(--text-main);margin-bottom:4px}
+.module-desc{font-size:12px;color:var(--text-muted);line-height:1.5;margin-bottom:10px}
+.module-footer{display:flex;justify-content:space-between;align-items:center}
+.module-mins{font-size:11px;color:var(--text-muted)}
+.module-btn{font-size:11px;font-weight:600;padding:5px 14px;border-radius:20px;border:none;cursor:pointer;color:#fff}
+.myth-card{background:var(--navy);border-radius:var(--radius-sm);padding:16px}
+.myth-tag{font-size:10px;color:var(--amber);font-weight:600;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px}
+.myth-q{font-family:'DM Serif Display',serif;font-size:17px;color:#fff;margin-bottom:8px}
+.myth-reveal{font-size:12px;color:var(--text-light);line-height:1.6}
+
+/* ── Food ── */
+.food-hero{background:var(--navy);padding:4px 20px 20px;flex-shrink:0}
+.food-hero h1{font-family:'DM Serif Display',serif;font-size:26px;color:#fff;margin-bottom:4px}
+.food-hero p{font-size:13px;color:var(--text-light)}
+.food-body{padding:16px;display:flex;flex-direction:column;gap:12px}
+.macro-strip{background:#fff;border-radius:var(--radius-sm);padding:14px;
+  display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.macro-item{text-align:center}
+.macro-val{font-size:18px;font-weight:600}
+.macro-label{font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.4px}
+.food-items{display:flex;flex-direction:column;gap:1px;background:#F0EBE1;border-radius:var(--radius-sm);overflow:hidden}
+.food-item{background:#fff;padding:11px 14px;display:flex;align-items:center;gap:10px}
+.food-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.food-name{flex:1;font-size:13px;color:var(--text-main);font-weight:500}
+.food-why{font-size:11px;color:var(--text-muted)}
+.food-impact{font-size:10px;font-weight:600;padding:2px 8px;border-radius:20px;flex-shrink:0}
+.impact-great{background:#E8F8F0;color:#27814F}
+.impact-good{background:#E8F4FB;color:#1565A8}
+.impact-bad{background:#FEEAE8;color:#C0392B}
+.gulf-card{background:var(--navy);border-radius:var(--radius-sm);padding:16px}
+.gulf-tag{font-size:11px;color:var(--amber);font-weight:600;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px}
+.gulf-title{font-family:'DM Serif Display',serif;font-size:16px;color:#fff;margin-bottom:6px}
+.gulf-body{font-size:12px;color:var(--text-light);line-height:1.6}
+
+/* ── Risk calc ── */
+.calc-hero{background:var(--navy);padding:4px 20px 20px;flex-shrink:0}
+.calc-hero h1{font-family:'DM Serif Display',serif;font-size:26px;color:#fff;margin-bottom:4px}
+.calc-hero p{font-size:13px;color:var(--text-light)}
+.calc-body{padding:16px;display:flex;flex-direction:column;gap:12px}
+.calc-card{background:#fff;border-radius:var(--radius-sm);padding:16px}
+.calc-row{margin-bottom:14px}
+.calc-row:last-child{margin-bottom:0}
+.calc-label{font-size:12px;color:var(--text-muted);font-weight:500;margin-bottom:6px;display:flex;justify-content:space-between}
+.calc-label span{font-weight:600;color:var(--text-main)}
+input[type=range]{-webkit-appearance:none;width:100%;height:4px;border-radius:2px;
+  background:var(--cream2);outline:none}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;
+  border-radius:50%;background:var(--navy);cursor:pointer;box-shadow:0 2px 6px rgba(15,31,61,0.3)}
+.toggle-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.toggle-row:last-child{margin-bottom:0}
+.toggle-label{font-size:13px;color:var(--text-main)}
+.toggle{width:44px;height:24px;border-radius:12px;background:var(--cream2);
+  position:relative;cursor:pointer;transition:background 0.2s;border:none;outline:none;flex-shrink:0}
+.toggle.on{background:var(--teal)}
+.toggle::after{content:'';position:absolute;width:18px;height:18px;border-radius:50%;
+  background:#fff;top:3px;left:3px;transition:transform 0.2s;box-shadow:0 1px 3px rgba(0,0,0,0.2)}
+.toggle.on::after{transform:translateX(20px)}
+.result-card{background:var(--navy);border-radius:var(--radius-sm);padding:20px;color:#fff;text-align:center}
+.result-label{font-size:11px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px}
+.result-number{font-family:'DM Serif Display',serif;font-size:52px;color:#fff;line-height:1}
+.result-tier-strip{display:flex;gap:6px;justify-content:center;margin-top:14px}
+.r-tier{flex:1;height:4px;border-radius:2px;transition:background 0.3s}
+.result-advice{margin-top:14px;font-size:13px;color:var(--text-light);line-height:1.5}
+.result-advice strong{color:var(--amber)}
+.ldl-target-card{background:#fff;border-radius:var(--radius-sm);padding:16px}
+.ldl-target-title{font-size:14px;font-weight:600;color:var(--text-main);margin-bottom:12px}
+.ldl-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--cream2)}
+.ldl-row:last-child{border-bottom:none}
+.ldl-risk{font-size:13px;color:var(--text-main)}
+.ldl-target{font-size:13px;font-weight:600}
+.logout-btn{background:none;border:1.5px solid rgba(255,255,255,0.2);color:var(--text-light);
+  border-radius:8px;padding:8px 14px;font-size:12px;font-family:'DM Sans',sans-serif;cursor:pointer}
+
+/* ── Modal ── */
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(15,31,61,0.7);
+  z-index:100;align-items:flex-end;justify-content:center}
+.modal-overlay.open{display:flex}
+.modal-sheet{background:#fff;border-radius:24px 24px 0 0;padding:24px 20px 40px;
+  width:100%;max-width:440px;animation:slideUp 0.3s ease}
+@keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
+.modal-handle{width:40px;height:4px;background:var(--cream2);border-radius:2px;margin:0 auto 20px}
+.modal-title{font-family:'DM Serif Display',serif;font-size:22px;color:var(--navy);margin-bottom:4px}
+.modal-sub{font-size:13px;color:var(--text-muted);margin-bottom:20px}
+.form-label{font-size:12px;font-weight:500;color:var(--text-muted);margin-bottom:5px;display:block}
+.form-input{width:100%;padding:11px 13px;border:1.5px solid #E8E4DC;border-radius:10px;
+  font-size:14px;font-family:'DM Sans',sans-serif;outline:none;margin-bottom:12px;color:var(--text-main)}
+.form-input:focus{border-color:var(--navy)}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.form-btn{width:100%;padding:14px;background:var(--navy);color:#fff;border:none;
+  border-radius:10px;font-size:14px;font-weight:600;font-family:'DM Sans',sans-serif;cursor:pointer;margin-top:4px}
+.form-cancel{width:100%;padding:12px;background:none;color:var(--text-muted);border:none;
+  font-size:13px;font-family:'DM Sans',sans-serif;cursor:pointer;margin-top:8px}
+
+/* ── Toast ── */
+.toast{position:fixed;bottom:90px;left:50%;transform:translateX(-50%) translateY(20px);
+  background:var(--navy);color:#fff;padding:10px 20px;border-radius:30px;
+  font-size:13px;font-weight:500;opacity:0;transition:all 0.3s;z-index:200;white-space:nowrap}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.scroll-area > *{animation:fadeIn 0.3s ease both}
+</style>
+</head>
+<body>
+
+<!-- ── AUTH SCREEN ────────────────────────────────────────── -->
+<div id="auth-screen">
+  <div class="auth-logo">Lipid<span>Life</span></div>
+  <div class="auth-sub">Your personalised cholesterol coach</div>
+  <div class="auth-card">
+    <div class="auth-tabs">
+      <button class="auth-tab active" onclick="switchTab('login')">Sign In</button>
+      <button class="auth-tab" onclick="switchTab('register')">Register</button>
+    </div>
+    <!-- Login -->
+    <div class="auth-panel active" id="panel-login">
+      <input class="auth-input" id="login-email" type="email" placeholder="Email address">
+      <input class="auth-input" id="login-pass" type="password" placeholder="Password">
+      <button class="auth-btn" onclick="doLogin()">Sign In</button>
+      <div class="auth-error" id="login-error"></div>
+    </div>
+    <!-- Register -->
+    <div class="auth-panel" id="panel-register">
+      <input class="auth-input" id="reg-name" type="text" placeholder="Full name">
+      <input class="auth-input" id="reg-email" type="email" placeholder="Email address">
+      <input class="auth-input" id="reg-pass" type="password" placeholder="Password (min 6 chars)">
+      <input class="auth-input" id="reg-age" type="number" placeholder="Age">
+      <button class="auth-btn" onclick="doRegister()">Create Account</button>
+      <div class="auth-error" id="reg-error"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── APP SCREEN ─────────────────────────────────────────── -->
+<div id="app-screen">
+
+  <!-- DASHBOARD -->
+  <div class="screen active" id="screen-home">
+    <div class="status-bar">
+      <span id="clock">9:41</span>
+      <button class="logout-btn" onclick="doLogout()">Sign out</button>
+    </div>
+    <div class="dash-header">
+      <div class="dash-greeting">Good morning,</div>
+      <div class="dash-name" id="dash-name">Loading…</div>
+    </div>
+    <div class="risk-ring-section">
+      <div class="risk-ring-card">
+        <div class="ring-wrap">
+          <svg width="88" height="88" viewBox="0 0 88 88">
+            <circle cx="44" cy="44" r="36" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="7"/>
+            <circle id="risk-ring" cx="44" cy="44" r="36" fill="none" stroke="#F5A623" stroke-width="7"
+              stroke-dasharray="226" stroke-dashoffset="136" stroke-linecap="round" style="transition:stroke-dashoffset 0.6s ease"/>
+          </svg>
+          <div class="ring-center">
+            <div class="ring-pct" id="ring-pct">—</div>
+            <div class="ring-sub">10-yr risk</div>
+          </div>
+        </div>
+        <div class="risk-info">
+          <div class="risk-label">Cardiac risk category</div>
+          <div style="font-family:'DM Serif Display',serif;font-size:24px;color:#fff" id="risk-cat-display">—</div>
+          <div class="risk-tier" id="risk-cat">Moderate</div>
+          <div class="risk-desc">LDL target: &lt;<span id="target-ldl">100</span> mg/dL</div>
+        </div>
+      </div>
+    </div>
+    <div class="scroll-area">
+      <div class="scroll-content">
+        <!-- Streak -->
+        <div class="streak-card">
+          <div class="streak-icon">🔥</div>
+          <div>
+            <div class="streak-num" id="streak-num">0</div>
+            <div class="streak-label">day streak — keep it going!</div>
+          </div>
+        </div>
+        <!-- Latest results -->
+        <div class="section-title">Latest blood results</div>
+        <div class="chol-grid">
+          <div class="chol-card">
+            <div class="chol-card-label">LDL Cholesterol</div>
+            <div class="chol-card-val" id="val-ldl">—</div>
+            <div class="chol-card-unit">mg/dL</div>
+            <div class="chol-card-status status-high" id="ldl-status">—</div>
+          </div>
+          <div class="chol-card">
+            <div class="chol-card-label">HDL Cholesterol</div>
+            <div class="chol-card-val" id="val-hdl">—</div>
+            <div class="chol-card-unit">mg/dL</div>
+          </div>
+          <div class="chol-card">
+            <div class="chol-card-label">Triglycerides</div>
+            <div class="chol-card-val" id="val-tg">—</div>
+            <div class="chol-card-unit">mg/dL</div>
+          </div>
+          <div class="chol-card">
+            <div class="chol-card-label">Total Cholesterol</div>
+            <div class="chol-card-val" id="val-tc">—</div>
+            <div class="chol-card-unit">mg/dL</div>
+          </div>
+        </div>
+        <div class="lab-date-row" id="lab-date">No results yet</div>
+        <button class="add-lab-btn" onclick="openModal('modal-lab')">+ Add New Lab Result</button>
+        <!-- Trend -->
+        <div class="section-title">LDL trend</div>
+        <div class="trend-card">
+          <div class="trend-header">
+            <div class="trend-title">LDL progress</div>
+            <div class="trend-badge" id="trend-badge">Add results to see trend</div>
+          </div>
+          <div class="trend-bars" id="trend-bars">
+            <div class="no-data-hint">Add at least 2 lab results to see your trend chart</div>
+          </div>
+        </div>
+        <!-- Tasks -->
+        <div class="section-title">Today's habits</div>
+        <div class="task-card">
+          <div class="task-header">
+            <div class="trend-title" style="font-size:14px">Daily checklist</div>
+            <div class="task-progress-text">0 of 6 done</div>
+          </div>
+          <div class="task-progress-bar"><div class="task-progress-fill" style="width:0%"></div></div>
+          <div class="task-item" data-taskid="TSK001" onclick="completeTask('TSK001','Omega-3 supplement',10,this)">
+            <div class="task-check"></div>
+            <div class="task-text">Take omega-3 supplement</div>
+            <div class="task-pts">+10 pts</div>
+          </div>
+          <div class="task-item" data-taskid="TSK002" onclick="completeTask('TSK002','Avoid saturated fat at breakfast',15,this)">
+            <div class="task-check"></div>
+            <div class="task-text">Avoid saturated fat at breakfast</div>
+            <div class="task-pts">+15 pts</div>
+          </div>
+          <div class="task-item" data-taskid="TSK003" onclick="completeTask('TSK003','30 min exercise',20,this)">
+            <div class="task-check"></div>
+            <div class="task-text">30 min brisk walk or exercise</div>
+            <div class="task-pts">+20 pts</div>
+          </div>
+          <div class="task-item" data-taskid="TSK004" onclick="completeTask('TSK004','Eat a handful of nuts',10,this)">
+            <div class="task-check"></div>
+            <div class="task-text">Eat a handful of nuts today</div>
+            <div class="task-pts">+10 pts</div>
+          </div>
+          <div class="task-item" data-taskid="TSK005" onclick="completeTask('TSK005','Eat oats or barley',15,this)">
+            <div class="task-check"></div>
+            <div class="task-text">Eat oats or barley at breakfast</div>
+            <div class="task-pts">+15 pts</div>
+          </div>
+          <div class="task-item" data-taskid="TSK006" onclick="completeTask('TSK006','No sugary drinks',15,this)">
+            <div class="task-check"></div>
+            <div class="task-text">No sugary drinks today</div>
+            <div class="task-pts">+15 pts</div>
+          </div>
+        </div>
+        <div style="height:16px"></div>
+      </div>
+    </div>
+    <div class="nav-bar">
+      <button class="nav-item active" onclick="showScreen('home')"><div class="nav-icon">⊕</div><div class="nav-label">Home</div></button>
+      <button class="nav-item" onclick="showScreen('learn')"><div class="nav-icon">◉</div><div class="nav-label">Learn</div></button>
+      <button class="nav-item" onclick="showScreen('food')"><div class="nav-icon">◈</div><div class="nav-label">Food</div></button>
+      <button class="nav-item" onclick="showScreen('risk')"><div class="nav-icon">◎</div><div class="nav-label">My Risk</div></button>
+    </div>
+  </div>
+
+  <!-- LEARN -->
+  <div class="screen" id="screen-learn">
+    <div class="status-bar"><span id="clock2"></span><span style="color:rgba(255,255,255,0.4)">LipidLife</span></div>
+    <div class="learn-hero">
+      <h1>Understand<br>your cholesterol</h1>
+      <p>Science-based lessons from your cardiologist</p>
+    </div>
+    <div class="scroll-area">
+      <div class="learn-body">
+        <div class="section-title">Lessons</div>
+        <div class="module-card">
+          <div class="module-color-bar" style="background:#E8705A"></div>
+          <div class="module-inner">
+            <div class="module-tag">Lesson 1 · Foundations</div>
+            <div class="module-title">What actually is cholesterol?</div>
+            <div class="module-desc">It's not a poison — it's a molecule your body makes. Learn why LDL becomes dangerous and what "plaque" really means inside your arteries.</div>
+            <div class="module-footer"><div class="module-mins">4 min read</div>
+            <button class="module-btn" style="background:#E8705A" onclick="openLesson(0)">Start →</button></div>
+          </div>
+        </div>
+        <div class="module-card">
+          <div class="module-color-bar" style="background:#2EB8A6"></div>
+          <div class="module-inner">
+            <div class="module-tag">Lesson 2 · Your numbers</div>
+            <div class="module-title">Why your LDL target depends on YOU</div>
+            <div class="module-desc">A number that's fine for your neighbour may be dangerous for you. Understand how your personal risk profile sets your target.</div>
+            <div class="module-footer"><div class="module-mins">5 min read</div>
+            <button class="module-btn" style="background:#2EB8A6" onclick="openLesson(1)">Start →</button></div>
+          </div>
+        </div>
+        <div class="module-card">
+          <div class="module-color-bar" style="background:#F5A623"></div>
+          <div class="module-inner">
+            <div class="module-tag">Lesson 3 · Lifestyle</div>
+            <div class="module-title">The 3-month window — and how to use it</div>
+            <div class="module-desc">Guidelines give you 3 months of lifestyle change. What does the evidence say you can achieve — and how?</div>
+            <div class="module-footer"><div class="module-mins">6 min read</div>
+            <button class="module-btn" style="background:#F5A623;color:#0F1F3D" onclick="openLesson(2)">Start →</button></div>
+          </div>
+        </div>
+        <div class="module-card">
+          <div class="module-color-bar" style="background:#243F78"></div>
+          <div class="module-inner">
+            <div class="module-tag">Lesson 4 · Risk</div>
+            <div class="module-title">Heart attack risk: what your % actually means</div>
+            <div class="module-desc">Visualize your 10-year risk in real terms. How much can lifestyle change that number?</div>
+            <div class="module-footer"><div class="module-mins">5 min read</div>
+            <button class="module-btn" style="background:#243F78" onclick="openLesson(3)">Start →</button></div>
+          </div>
+        </div>
+        <div class="section-title" style="margin-top:4px">Myth busters</div>
+        <div class="myth-card">
+          <div class="myth-tag">Common myth</div>
+          <div class="myth-q">"I feel fine, so my cholesterol can't be dangerous."</div>
+          <div class="myth-reveal">High LDL has no symptoms. Arterial plaque builds silently for years before a heart attack. The first symptom is sometimes the event itself.</div>
+        </div>
+        <div class="myth-card">
+          <div class="myth-tag">Common myth</div>
+          <div class="myth-q">"Eating cholesterol raises my blood cholesterol."</div>
+          <div class="myth-reveal">Dietary cholesterol (eggs, shrimp) has minimal impact for most people. Saturated and trans fats are the main driver of LDL — not food cholesterol itself.</div>
+        </div>
+        <div class="myth-card">
+          <div class="myth-tag">Common myth</div>
+          <div class="myth-q">"Once on statins, I don't need to change my diet."</div>
+          <div class="myth-reveal">Statins reduce LDL by 30–50%, but lifestyle adds another 20–30% — and improves HDL and triglycerides, which statins do less for.</div>
+        </div>
+        <div class="myth-card">
+          <div class="myth-tag">Gulf context</div>
+          <div class="myth-q">"Shisha is safer than cigarettes for my heart."</div>
+          <div class="myth-reveal">One hour of shisha delivers more carbon monoxide than a full pack of cigarettes. The cardiovascular harm is equivalent to heavy smoking.</div>
+        </div>
+        <div style="height:16px"></div>
+      </div>
+    </div>
+    <div class="nav-bar">
+      <button class="nav-item" onclick="showScreen('home')"><div class="nav-icon">⊕</div><div class="nav-label">Home</div></button>
+      <button class="nav-item active" onclick="showScreen('learn')"><div class="nav-icon">◉</div><div class="nav-label">Learn</div></button>
+      <button class="nav-item" onclick="showScreen('food')"><div class="nav-icon">◈</div><div class="nav-label">Food</div></button>
+      <button class="nav-item" onclick="showScreen('risk')"><div class="nav-icon">◎</div><div class="nav-label">My Risk</div></button>
+    </div>
+  </div>
+
+  <!-- FOOD -->
+  <div class="screen" id="screen-food">
+    <div class="status-bar"><span></span><span style="color:rgba(255,255,255,0.4)">LipidLife</span></div>
+    <div class="food-hero">
+      <h1>Eat for<br>your heart</h1>
+      <p>Foods ranked by LDL impact</p>
+    </div>
+    <div class="scroll-area">
+      <div class="food-body">
+        <div class="macro-strip">
+          <div class="macro-item"><div class="macro-val" style="color:#E8705A">↓25%</div><div class="macro-label">Sat. fat goal</div></div>
+          <div class="macro-item"><div class="macro-val" style="color:#2EB8A6">↑30g</div><div class="macro-label">Fibre goal</div></div>
+          <div class="macro-item"><div class="macro-val" style="color:#4CAF82">2×wk</div><div class="macro-label">Oily fish</div></div>
+        </div>
+        <div class="section-title">Power foods — proven to lower LDL</div>
+        <div class="food-items">
+          <div class="food-item"><div class="food-dot" style="background:#4CAF82"></div><div><div class="food-name">Oats & barley (beta-glucan)</div><div class="food-why">Soluble fibre binds LDL in the gut</div></div><div class="food-impact impact-great">–10% LDL</div></div>
+          <div class="food-item"><div class="food-dot" style="background:#4CAF82"></div><div><div class="food-name">Almonds & walnuts</div><div class="food-why">Plant sterols + healthy fats</div></div><div class="food-impact impact-great">–8% LDL</div></div>
+          <div class="food-item"><div class="food-dot" style="background:#4CAF82"></div><div><div class="food-name">Extra virgin olive oil</div><div class="food-why">Replaces saturated fat</div></div><div class="food-impact impact-great">–7% LDL</div></div>
+          <div class="food-item"><div class="food-dot" style="background:#4CAF82"></div><div><div class="food-name">Salmon & sardines</div><div class="food-why">Omega-3 lowers triglycerides</div></div><div class="food-impact impact-good">–TG 20%</div></div>
+          <div class="food-item"><div class="food-dot" style="background:#4CAF82"></div><div><div class="food-name">Lentils & chickpeas</div><div class="food-why">High soluble fibre, low sat fat</div></div><div class="food-impact impact-great">–6% LDL</div></div>
+          <div class="food-item"><div class="food-dot" style="background:#4CAF82"></div><div><div class="food-name">Avocado</div><div class="food-why">Monounsaturated fat raises HDL</div></div><div class="food-impact impact-good">↑ HDL</div></div>
+        </div>
+        <div class="section-title" style="margin-top:4px">Avoid — raise LDL significantly</div>
+        <div class="food-items">
+          <div class="food-item"><div class="food-dot" style="background:#E8705A"></div><div><div class="food-name">Processed meats</div><div class="food-why">Very high saturated + trans fat</div></div><div class="food-impact impact-bad">+LDL</div></div>
+          <div class="food-item"><div class="food-dot" style="background:#E8705A"></div><div><div class="food-name">Ghee & palm oil</div><div class="food-why">Saturated fat raises LDL directly</div></div><div class="food-impact impact-bad">+LDL</div></div>
+          <div class="food-item"><div class="food-dot" style="background:#E8705A"></div><div><div class="food-name">Sugary drinks & white bread</div><div class="food-why">Spikes triglycerides, lowers HDL</div></div><div class="food-impact impact-bad">+TG</div></div>
+          <div class="food-item"><div class="food-dot" style="background:#E8705A"></div><div><div class="food-name">Full-fat dairy (cheese, cream)</div><div class="food-why">Saturated fat — switch to low-fat</div></div><div class="food-impact impact-bad">+LDL</div></div>
+        </div>
+        <div class="gulf-card">
+          <div class="gulf-tag">Ramadan guidance</div>
+          <div class="gulf-title">Eating for your heart during Ramadan</div>
+          <div class="gulf-body">Break fast with 2–3 dates + water — ideal. Avoid heavy fried foods at Iftar. The spike in saturated fat after a long fast is absorbed more aggressively. Opt for lentil soup, grilled fish, and whole grains. Suhoor: oats with nuts keeps cholesterol low through the fast.</div>
+        </div>
+        <div style="height:16px"></div>
+      </div>
+    </div>
+    <div class="nav-bar">
+      <button class="nav-item" onclick="showScreen('home')"><div class="nav-icon">⊕</div><div class="nav-label">Home</div></button>
+      <button class="nav-item" onclick="showScreen('learn')"><div class="nav-icon">◉</div><div class="nav-label">Learn</div></button>
+      <button class="nav-item active" onclick="showScreen('food')"><div class="nav-icon">◈</div><div class="nav-label">Food</div></button>
+      <button class="nav-item" onclick="showScreen('risk')"><div class="nav-icon">◎</div><div class="nav-label">My Risk</div></button>
+    </div>
+  </div>
+
+  <!-- RISK CALCULATOR -->
+  <div class="screen" id="screen-risk">
+    <div class="status-bar"><span></span><span style="color:rgba(255,255,255,0.4)">LipidLife</span></div>
+    <div class="calc-hero">
+      <h1>Your cardiac<br>risk</h1>
+      <p>Adjust values to see your personalised risk</p>
+    </div>
+    <div class="scroll-area">
+      <div class="calc-body">
+        <div class="calc-card">
+          <div class="calc-row"><div class="calc-label">Age <span id="c-age-v">52</span></div><input type="range" id="c-age" min="30" max="75" value="52" oninput="updateCalc()"></div>
+          <div class="calc-row"><div class="calc-label">LDL cholesterol <span id="c-ldl-v">148 mg/dL</span></div><input type="range" id="c-ldl" min="70" max="250" value="148" oninput="updateCalc()"></div>
+          <div class="calc-row"><div class="calc-label">Systolic blood pressure <span id="c-bp-v">138 mmHg</span></div><input type="range" id="c-bp" min="100" max="180" value="138" oninput="updateCalc()"></div>
+          <div class="calc-row"><div class="calc-label">HDL cholesterol <span id="c-hdl-v">44 mg/dL</span></div><input type="range" id="c-hdl" min="25" max="90" value="44" oninput="updateCalc()"></div>
+        </div>
+        <div class="calc-card">
+          <div class="toggle-row"><div class="toggle-label">Diabetes</div><button class="toggle" id="t-diabetes" onclick="toggleCalcBtn(this)"></button></div>
+          <div class="toggle-row"><div class="toggle-label">Current smoker</div><button class="toggle" id="t-smoke" onclick="toggleCalcBtn(this)"></button></div>
+          <div class="toggle-row"><div class="toggle-label">Family history of heart disease</div><button class="toggle on" id="t-family" onclick="toggleCalcBtn(this)"></button></div>
+        </div>
+        <div class="result-card">
+          <div class="result-label">Estimated 10-year heart attack risk</div>
+          <div><span class="result-number" id="risk-number">12</span><span style="font-size:16px;color:var(--text-light)">%</span></div>
+          <div class="result-tier-strip">
+            <div class="r-tier" id="tier1" style="background:#4CAF82"></div>
+            <div class="r-tier" id="tier2" style="background:#F5A623"></div>
+            <div class="r-tier" id="tier3" style="background:rgba(255,255,255,0.15)"></div>
+            <div class="r-tier" id="tier4" style="background:rgba(255,255,255,0.15)"></div>
+          </div>
+          <div class="result-advice" id="risk-advice">Moderate risk. Lifestyle change can reduce this by <strong>30–40%</strong>. LDL target: &lt;<strong>100 mg/dL</strong>.</div>
+        </div>
+        <div class="ldl-target-card">
+          <div class="ldl-target-title">LDL targets by risk level (ESC Guidelines)</div>
+          <div class="ldl-row"><div class="ldl-risk">Low risk (&lt;5%)</div><div class="ldl-target" style="color:#4CAF82">&lt;116 mg/dL</div></div>
+          <div class="ldl-row"><div class="ldl-risk">Moderate risk (5–10%)</div><div class="ldl-target" style="color:#F5A623">&lt;100 mg/dL</div></div>
+          <div class="ldl-row"><div class="ldl-risk">High risk (10–20%)</div><div class="ldl-target" style="color:#E8705A">&lt;70 mg/dL</div></div>
+          <div class="ldl-row"><div class="ldl-risk">Very high risk (&gt;20%)</div><div class="ldl-target" style="color:#C0392B">&lt;55 mg/dL</div></div>
+        </div>
+        <div style="height:16px"></div>
+      </div>
+    </div>
+    <div class="nav-bar">
+      <button class="nav-item" onclick="showScreen('home')"><div class="nav-icon">⊕</div><div class="nav-label">Home</div></button>
+      <button class="nav-item" onclick="showScreen('learn')"><div class="nav-icon">◉</div><div class="nav-label">Learn</div></button>
+      <button class="nav-item" onclick="showScreen('food')"><div class="nav-icon">◈</div><div class="nav-label">Food</div></button>
+      <button class="nav-item active" onclick="showScreen('risk')"><div class="nav-icon">◎</div><div class="nav-label">My Risk</div></button>
+    </div>
+  </div>
+
+</div><!-- /app-screen -->
+
+<!-- ── LAB RESULT MODAL ──────────────────────────────────── -->
+<div class="modal-overlay" id="modal-lab" onclick="bgClose(event,'modal-lab')">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div class="modal-title">Add Lab Result</div>
+    <div class="modal-sub">Enter values from your blood test report</div>
+    <label class="form-label">Test date *</label>
+    <input class="form-input" id="f-date" type="date">
+    <div class="form-row">
+      <div><label class="form-label">LDL (mg/dL) *</label><input class="form-input" id="f-ldl" type="number" placeholder="e.g. 148"></div>
+      <div><label class="form-label">HDL (mg/dL) *</label><input class="form-input" id="f-hdl" type="number" placeholder="e.g. 44"></div>
+    </div>
+    <div class="form-row">
+      <div><label class="form-label">Total Chol. *</label><input class="form-input" id="f-tc" type="number" placeholder="e.g. 224"></div>
+      <div><label class="form-label">Triglycerides *</label><input class="form-input" id="f-tg" type="number" placeholder="e.g. 180"></div>
+    </div>
+    <label class="form-label">Notes (optional)</label>
+    <input class="form-input" id="f-note" type="text" placeholder="e.g. After 4 weeks of diet change">
+    <div class="auth-error" id="lab-error"></div>
+    <button class="form-btn" id="save-lab-btn" onclick="saveLabResult()">Save Result</button>
+    <button class="form-cancel" onclick="closeModal('modal-lab')">Cancel</button>
+  </div>
+</div>
+
+<!-- ── LESSON MODAL ──────────────────────────────────────── -->
+<div class="modal-overlay" id="modal-lesson" onclick="bgClose(event,'modal-lesson')">
+  <div class="modal-sheet" style="max-height:85vh;overflow-y:auto">
+    <div class="modal-handle"></div>
+    <div class="modal-title" id="lesson-title"></div>
+    <div class="modal-sub" id="lesson-tag"></div>
+    <div id="lesson-body" style="font-size:14px;color:#3A4A6A;line-height:1.75;margin-top:4px"></div>
+    <button class="form-cancel" onclick="closeModal('modal-lesson')" style="margin-top:20px">Close</button>
+  </div>
+</div>
+
+<!-- ── TOAST ─────────────────────────────────────────────── -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ── UI helpers ────────────────────────────────────────────
+function showScreen(name) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('screen-' + name).classList.add('active');
+  document.querySelectorAll('.nav-bar').forEach(nb => {
+    nb.querySelectorAll('.nav-item').forEach((n, i) => {
+      const screens = ['home','learn','food','risk'];
+      if (screens[i] === name) n.classList.add('active');
+    });
+  });
+  // Trigger calc on first visit
+  if (name === 'risk') setTimeout(updateCalc, 100);
+}
+
+function switchTab(tab) {
+  document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.auth-panel').forEach(p => p.classList.remove('active'));
+  document.querySelector(`.auth-tab:nth-child(${tab==='login'?1:2})`).classList.add('active');
+  document.getElementById('panel-' + tab).classList.add('active');
+}
+
+function openModal(id) {
+  document.getElementById(id).classList.add('open');
+  if (id === 'modal-lab') {
+    const today = new Date().toISOString().split('T')[0];
+    document.getElementById('f-date').value = today;
+  }
+}
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+function bgClose(e, id) { if (e.target.id === id) closeModal(id); }
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+// ── Lessons content ───────────────────────────────────────
+const lessons = [
+  { title: "What actually is cholesterol?", tag: "Lesson 1 · Foundations · 4 min",
+    body: `<p>Cholesterol is a waxy, fat-like substance found in every cell of your body. Your liver manufactures about 75% of it. You need it to make hormones, vitamin D, and substances that help you digest food.</p><br>
+    <p><strong>The problem</strong> starts when there's too much LDL ("bad") cholesterol circulating in your blood. LDL particles can penetrate artery walls, oxidise, and trigger inflammation — starting the process of plaque build-up called <em>atherosclerosis</em>. This narrows arteries and raises your risk of heart attack and stroke.</p><br>
+    <p><strong>HDL</strong> ("good") cholesterol does the opposite — it carries excess cholesterol back to the liver for disposal. Think of LDL as delivery trucks dropping cholesterol off at artery walls, and HDL as the clean-up crew picking it back up.</p><br>
+    <p><strong>Key takeaway:</strong> High LDL is not inevitable. Diet, exercise, and if needed medication, can all shift these numbers meaningfully.</p>` },
+  { title: "Why your LDL target depends on YOU", tag: "Lesson 2 · Your Numbers · 5 min",
+    body: `<p>LDL targets are not one-size-fits-all. Your cardiologist sets your personal target based on your <em>overall</em> cardiovascular risk — not just your cholesterol number in isolation.</p><br>
+    <p><strong>Risk-based LDL targets (ESC 2021 Guidelines):</strong></p><br>
+    <p>🟢 <strong>Low risk</strong> — LDL target &lt;116 mg/dL<br>🟡 <strong>Moderate risk</strong> — LDL target &lt;100 mg/dL<br>🟠 <strong>High risk</strong> (diabetes, hypertension, 10-yr risk &gt;10%) — LDL target &lt;70 mg/dL<br>🔴 <strong>Very high risk</strong> (previous heart attack, stent, or bypass) — LDL target &lt;55 mg/dL</p><br>
+    <p>This is why two people with the same LDL of 130 mg/dL may get completely different advice. For one, lifestyle change alone may be enough. For the other, medication is needed immediately.</p><br>
+    <p><strong>Key takeaway:</strong> Ask your cardiologist what YOUR specific LDL target is, and why. Then track your progress toward that number — not a generic one.</p>` },
+  { title: "The 3-month window — and how to use it", tag: "Lesson 3 · Lifestyle · 6 min",
+    body: `<p>International cardiology guidelines recommend a <strong>3-month trial of intensive lifestyle change</strong> before starting cholesterol-lowering medication in most moderate-risk patients.</p><br>
+    <p>The key word is <em>intensive</em>. Evidence shows dedicated lifestyle change can reduce LDL by <strong>20–30%</strong>. Casual changes rarely move the needle.</p><br>
+    <p><strong>The 5 interventions with the most evidence:</strong></p><br>
+    <p>1️⃣ <strong>Reduce saturated fat</strong> to &lt;7% of daily calories (replace butter/ghee with olive oil)<br>
+    2️⃣ <strong>Add soluble fibre</strong> — oats, barley, lentils — 10–25g daily<br>
+    3️⃣ <strong>Exercise 150 min/week</strong> moderate intensity (raises HDL, lowers triglycerides)<br>
+    4️⃣ <strong>Add plant sterols</strong> (fortified foods or supplements, 2g/day)<br>
+    5️⃣ <strong>Replace refined carbs</strong> with whole grains (lowers triglycerides)</p><br>
+    <p>This app is designed to make that intensity achievable through daily habit tracking. Every task you complete is moving your numbers.</p><br>
+    <p><strong>Key takeaway:</strong> The 3-month window is real. Use it aggressively. The results determine whether you need medication — or not.</p>` },
+  { title: "Heart attack risk: what your % actually means", tag: "Lesson 4 · Risk · 5 min",
+    body: `<p>A 10-year cardiovascular risk of <strong>12%</strong> means that out of 100 people with your exact risk profile, approximately 12 will have a heart attack or stroke in the next 10 years. That also means <em>88 will not.</em></p><br>
+    <p>But here's what matters: <strong>intensive lifestyle change can reduce this number by 30–40%.</strong></p><br>
+    <p>If your risk is 12%, sustained effort could bring it to 7–8% — moving you from "moderate" to "low" risk. Medication can reduce it further, often by another 25–35%.</p><br>
+    <p><strong>What moves your risk most:</strong></p><br>
+    <p>⬇️ Lowering LDL from 160 → 100 mg/dL: reduces risk ~30%<br>⬇️ Stopping smoking: reduces risk ~35%<br>⬇️ Controlling blood pressure: reduces risk ~20%<br>⬆️ Regular exercise: reduces risk ~25%</p><br>
+    <p><strong>Key takeaway:</strong> Your risk number is not fixed. Every habit you build in this app is chipping away at it. Use the Risk Calculator tab to see how your numbers change.</p>` }
+];
+
+window.openLesson = (i) => {
+  const l = lessons[i];
+  document.getElementById('lesson-title').textContent = l.title;
+  document.getElementById('lesson-tag').textContent = l.tag;
+  document.getElementById('lesson-body').innerHTML = l.body;
+  openModal('modal-lesson');
+};
+
+// ── Clock ─────────────────────────────────────────────────
+function updateClock() {
+  const now = new Date();
+  const t = now.getHours().toString().padStart(2,'0') + ':' + now.getMinutes().toString().padStart(2,'0');
+  document.getElementById('clock').textContent = t;
+  const c2 = document.getElementById('clock2');
+  if (c2) c2.textContent = t;
+}
+updateClock(); setInterval(updateClock, 30000);
+
+// ── Service worker registration ───────────────────────────
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+</script>
+</body>
+</html>

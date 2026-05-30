@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LipidLife — Cardiologist Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged }
+    from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+  import { getFirestore, collection, getDocs, query, orderBy, where, doc, updateDoc }
+    from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+  // ── PASTE SAME FIREBASE CONFIG ────────────────────────────
+  const firebaseConfig = {
+    apiKey: "AIzaSyDU7uatGGBfo0de_1aCo28tWGydNfS9z5M",
+    authDomain: "lipidlife.firebaseapp.com",
+    projectId: "lipidlife",
+    storageBucket: "lipidlife.firebasestorage.app",
+    messagingSenderId: "795549551612",
+    appId: "1:795549551612:web:aa8ebb7204019271604079"
+  };
+  // ─────────────────────────────────────────────────────────
+
+  // DOCTOR EMAIL — only this account can access the dashboard
+  const DOCTOR_EMAIL = "djan-niclas.strickling@gmx.de"; // ← change this
+
+  const app  = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db   = getFirestore(app);
+
+  let allUsers = [], allLabs = [], allLogs = [];
+
+  onAuthStateChanged(auth, async (user) => {
+    if (user && user.email === DOCTOR_EMAIL) {
+      document.getElementById('auth-screen').style.display = 'none';
+      document.getElementById('dash-screen').style.display = 'block';
+      await loadAll();
+      renderAll();
+    } else if (user) {
+      await signOut(auth);
+      document.getElementById('login-error').textContent = 'Access restricted to cardiologist account.';
+    } else {
+      document.getElementById('auth-screen').style.display = 'flex';
+      document.getElementById('dash-screen').style.display = 'none';
+    }
+  });
+
+  window.doLogin = async () => {
+    const email = document.getElementById('d-email').value.trim();
+    const pass  = document.getElementById('d-pass').value;
+    document.getElementById('login-error').textContent = '';
+    try { await signInWithEmailAndPassword(auth, email, pass); }
+    catch(e) { document.getElementById('login-error').textContent = 'Login failed. Check credentials.'; }
+  };
+
+  window.doLogout = () => signOut(auth);
+
+  async function loadAll() {
+    const [uSnap, lSnap, logSnap] = await Promise.all([
+      getDocs(collection(db, 'users')),
+      getDocs(query(collection(db, 'labResults'), orderBy('testDate', 'desc'))),
+      getDocs(collection(db, 'taskLog'))
+    ]);
+    allUsers = uSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    allLabs  = lSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    allLogs  = logSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  }
+
+  function renderAll() {
+    // Stats row
+    document.getElementById('stat-patients').textContent = allUsers.length;
+    const atTarget = allUsers.filter(u => {
+      const latest = allLabs.find(l => l.userId === u.id);
+      return latest && latest.ldl <= (u.targetLDL || 100);
+    }).length;
+    document.getElementById('stat-target').textContent = atTarget;
+    document.getElementById('stat-tasks').textContent = allLogs.length;
+
+    // Patient table
+    const tbody = document.getElementById('patient-tbody');
+    tbody.innerHTML = '';
+    allUsers.forEach(u => {
+      const labs = allLabs.filter(l => l.userId === u.id).sort((a,b) => b.testDate > a.testDate ? 1 : -1);
+      const latest = labs[0];
+      const first  = labs[labs.length - 1];
+      const trend  = latest && first && labs.length > 1 ? first.ldl - latest.ldl : null;
+      const today  = new Date().toISOString().split('T')[0];
+      const todayTasks = allLogs.filter(l => l.userId === u.id && l.date === today).length;
+      const totalLogs  = allLogs.filter(l => l.userId === u.id).length;
+      const started = u.programStartDate ? new Date(u.programStartDate) : new Date();
+      const days    = Math.max(1, Math.round((Date.now() - started) / 86400000));
+      const streak  = Math.min(days, Math.max(0, totalLogs > 0 ? Math.round(totalLogs / 5) : 0));
+
+      const ldlColor = latest ? (latest.ldl <= (u.targetLDL||100) ? '#27814F' : latest.ldl <= (u.targetLDL||100) + 30 ? '#9E6A0A' : '#C0392B') : '#888';
+      const trendText = trend === null ? '—' : trend > 0 ? `▼ ${trend}` : trend < 0 ? `▲ ${Math.abs(trend)}` : '→ 0';
+      const trendColor = trend > 0 ? '#27814F' : trend < 0 ? '#C0392B' : '#888';
+
+      tbody.innerHTML += `<tr onclick="showPatient('${u.id}')" style="cursor:pointer">
+        <td><div class="pt-name">${u.name || u.email}</div><div class="pt-sub">${u.riskCategory || 'Moderate'} risk · ${u.age || '?'} yrs</div></td>
+        <td><span style="font-weight:600;color:${ldlColor};font-size:16px">${latest ? latest.ldl : '—'}</span><span style="font-size:11px;color:#888"> / ${u.targetLDL||100}</span></td>
+        <td style="color:${trendColor};font-weight:600">${trendText}</td>
+        <td>${latest ? latest.hdl || '—' : '—'}</td>
+        <td>${latest ? latest.triglycerides || '—' : '—'}</td>
+        <td><span class="streak-pill">🔥 ${streak}d</span></td>
+        <td><span class="tasks-pill ${todayTasks >= 3 ? 'good' : todayTasks > 0 ? 'partial' : 'none'}">${todayTasks}/6 today</span></td>
+        <td>${latest ? latest.testDate : 'No data'}</td>
+        <td><button class="set-target-btn" onclick="event.stopPropagation();openSetTarget('${u.id}','${u.name}',${u.targetLDL||100})">Set target</button></td>
+      </tr>`;
+    });
+
+    if (allUsers.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:40px;color:#888">No patients registered yet. Share the patient app link to get started.</td></tr>';
+    }
+  }
+
+  window.showPatient = (uid) => {
+    const u = allUsers.find(u => u.id === uid);
+    const labs = allLabs.filter(l => l.userId === uid).sort((a,b) => a.testDate > b.testDate ? 1 : -1);
+    const logs = allLogs.filter(l => l.userId === uid);
+
+    document.getElementById('detail-name').textContent = u?.name || 'Patient';
+    document.getElementById('detail-meta').textContent =
+      `${u?.age || '?'} yrs · ${u?.riskCategory || 'Moderate'} risk · Target LDL: ${u?.targetLDL || 100} mg/dL · Started: ${u?.programStartDate || '—'}`;
+
+    const flags = [u?.diabetes && 'Diabetes', u?.smoker && 'Smoker', u?.familyHistory && 'Family Hx', u?.hypertension && 'Hypertension'].filter(Boolean);
+    document.getElementById('detail-flags').innerHTML = flags.map(f => `<span class="flag-pill">${f}</span>`).join('') || '<span style="color:#888;font-size:12px">No risk flags recorded</span>';
+
+    // Lab history table
+    const lbody = document.getElementById('lab-tbody');
+    lbody.innerHTML = labs.length === 0
+      ? '<tr><td colspan="6" style="text-align:center;padding:20px;color:#888">No lab results yet</td></tr>'
+      : labs.map(l => `<tr>
+          <td>${l.testDate}</td>
+          <td style="font-weight:600;color:${l.ldl <= (u?.targetLDL||100) ? '#27814F' : '#C0392B'}">${l.ldl}</td>
+          <td>${l.hdl}</td><td>${l.totalCholesterol}</td><td>${l.triglycerides}</td>
+          <td style="font-size:12px;color:#888">${l.notes || '—'}</td>
+        </tr>`).join('');
+
+    // Recent tasks
+    const today = new Date().toISOString().split('T')[0];
+    const recentLogs = logs.filter(l => l.date >= today.substring(0,8)).slice(-20);
+    document.getElementById('detail-tasks').textContent = `${logs.length} total habit completions`;
+
+    document.getElementById('patient-modal').style.display = 'flex';
+  };
+
+  window.closePatient = () => { document.getElementById('patient-modal').style.display = 'none'; };
+
+  window.openSetTarget = (uid, name, current) => {
+    document.getElementById('st-uid').value = uid;
+    document.getElementById('st-name').textContent = name;
+    document.getElementById('st-ldl').value = current;
+    document.getElementById('target-modal').style.display = 'flex';
+  };
+
+  window.saveTarget = async () => {
+    const uid  = document.getElementById('st-uid').value;
+    const ldl  = parseInt(document.getElementById('st-ldl').value);
+    const risk = document.getElementById('st-risk').value;
+    await updateDoc(doc(db, 'users', uid), { targetLDL: ldl, riskCategory: risk });
+    await loadAll(); renderAll();
+    document.getElementById('target-modal').style.display = 'none';
+    showToast('Target updated');
+  };
+
+  function showToast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg; t.style.opacity = 1;
+    setTimeout(() => { t.style.opacity = 0; }, 2500);
+  }
+
+  window.refreshData = async () => { await loadAll(); renderAll(); showToast('Data refreshed'); };
+</script>
+
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'DM Sans',sans-serif;background:#F0EBE1;min-height:100vh}
+#auth-screen{display:flex;flex-direction:column;align-items:center;justify-content:center;
+  height:100vh;background:#0F1F3D;gap:20px}
+.auth-logo{font-family:'DM Serif Display',serif;font-size:32px;color:#fff}
+.auth-logo span{color:#F5A623}
+.auth-sub{font-size:13px;color:#B0BED0}
+.auth-card{background:#fff;border-radius:20px;padding:28px;width:360px}
+.auth-input{width:100%;padding:11px 13px;border:1.5px solid #E8E4DC;border-radius:10px;
+  font-size:14px;font-family:'DM Sans',sans-serif;outline:none;margin-bottom:10px;color:#0F1F3D}
+.auth-input:focus{border-color:#0F1F3D}
+.auth-btn{width:100%;padding:13px;background:#0F1F3D;color:#fff;border:none;border-radius:10px;
+  font-size:14px;font-weight:600;font-family:'DM Sans',sans-serif;cursor:pointer}
+.auth-error{font-size:12px;color:#E8705A;margin-top:8px;min-height:16px}
+
+/* Dashboard */
+#dash-screen{display:none}
+.top-bar{background:#0F1F3D;padding:16px 28px;display:flex;align-items:center;justify-content:space-between}
+.logo{font-family:'DM Serif Display',serif;font-size:22px;color:#fff}
+.logo span{color:#F5A623}
+.logo-sub{font-size:12px;color:#B0BED0;margin-top:2px}
+.top-actions{display:flex;gap:10px;align-items:center}
+.refresh-btn{background:rgba(255,255,255,0.1);color:#fff;border:none;border-radius:8px;
+  padding:8px 16px;font-size:13px;font-family:'DM Sans',sans-serif;cursor:pointer}
+.logout-btn{background:none;border:1.5px solid rgba(255,255,255,0.2);color:#B0BED0;
+  border-radius:8px;padding:8px 14px;font-size:12px;font-family:'DM Sans',sans-serif;cursor:pointer}
+
+.container{max-width:1200px;margin:0 auto;padding:28px 24px}
+
+/* Stats */
+.stats-row{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:28px}
+.stat-card{background:#fff;border-radius:16px;padding:20px 24px}
+.stat-val{font-family:'DM Serif Display',serif;font-size:40px;color:#0F1F3D;line-height:1}
+.stat-label{font-size:12px;color:#7A8BA8;margin-top:4px;text-transform:uppercase;letter-spacing:0.5px}
+
+/* Table */
+.table-card{background:#fff;border-radius:16px;overflow:hidden}
+.table-header{padding:20px 24px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #F0EBE1}
+.table-title{font-family:'DM Serif Display',serif;font-size:20px;color:#0F1F3D}
+.table-sub{font-size:12px;color:#7A8BA8;margin-top:2px}
+table{width:100%;border-collapse:collapse}
+th{padding:10px 16px;text-align:left;font-size:11px;font-weight:600;text-transform:uppercase;
+  letter-spacing:0.6px;color:#7A8BA8;background:#FAFAF8;border-bottom:1px solid #F0EBE1}
+td{padding:14px 16px;border-bottom:1px solid #F5F3EE;font-size:13px;color:#0F1F3D}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#FAFAF8}
+.pt-name{font-weight:600;color:#0F1F3D;font-size:14px}
+.pt-sub{font-size:11px;color:#7A8BA8;margin-top:2px}
+.streak-pill{background:#FEF5E7;color:#9E6A0A;font-size:11px;font-weight:600;padding:3px 8px;border-radius:20px}
+.tasks-pill{font-size:11px;font-weight:600;padding:3px 8px;border-radius:20px}
+.tasks-pill.good{background:#E8F8F0;color:#27814F}
+.tasks-pill.partial{background:#FEF5E7;color:#9E6A0A}
+.tasks-pill.none{background:#F5F3EE;color:#7A8BA8}
+.set-target-btn{background:#0F1F3D;color:#fff;border:none;border-radius:6px;
+  padding:5px 12px;font-size:11px;font-family:'DM Sans',sans-serif;cursor:pointer}
+
+/* Modals */
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(15,31,61,0.6);
+  z-index:100;align-items:center;justify-content:center;padding:20px}
+.modal-box{background:#fff;border-radius:20px;padding:28px;width:100%;max-width:700px;max-height:85vh;overflow-y:auto}
+.modal-title{font-family:'DM Serif Display',serif;font-size:24px;color:#0F1F3D;margin-bottom:4px}
+.modal-sub-text{font-size:13px;color:#7A8BA8;margin-bottom:20px}
+.flag-pill{display:inline-block;background:#FEEAE8;color:#C0392B;font-size:11px;font-weight:600;
+  padding:3px 10px;border-radius:20px;margin-right:6px;margin-bottom:6px}
+.section-hdr{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.8px;
+  color:#7A8BA8;margin:20px 0 10px}
+.close-btn{background:#0F1F3D;color:#fff;border:none;border-radius:10px;padding:10px 24px;
+  font-size:13px;font-weight:600;font-family:'DM Sans',sans-serif;cursor:pointer;margin-top:16px}
+.form-label{font-size:12px;font-weight:500;color:#7A8BA8;margin-bottom:5px;display:block;margin-top:14px}
+.form-input{width:100%;padding:10px 13px;border:1.5px solid #E8E4DC;border-radius:10px;
+  font-size:14px;font-family:'DM Sans',sans-serif;outline:none;color:#0F1F3D}
+.form-input:focus{border-color:#0F1F3D}
+.save-btn{background:#0F1F3D;color:#fff;border:none;border-radius:10px;padding:12px 28px;
+  font-size:13px;font-weight:600;font-family:'DM Sans',sans-serif;cursor:pointer;margin-top:16px}
+
+.toast{position:fixed;bottom:24px;right:24px;background:#0F1F3D;color:#fff;
+  padding:10px 20px;border-radius:30px;font-size:13px;font-weight:500;
+  opacity:0;transition:opacity 0.3s;z-index:200}
+</style>
+</head>
+<body>
+
+<!-- AUTH -->
+<div id="auth-screen">
+  <div class="auth-logo">Lipid<span>Life</span></div>
+  <div class="auth-sub">Cardiologist Dashboard</div>
+  <div class="auth-card">
+    <input class="auth-input" id="d-email" type="email" placeholder="Doctor email">
+    <input class="auth-input" id="d-pass" type="password" placeholder="Password">
+    <button class="auth-btn" onclick="doLogin()">Sign In to Dashboard</button>
+    <div class="auth-error" id="login-error"></div>
+  </div>
+</div>
+
+<!-- DASHBOARD -->
+<div id="dash-screen">
+  <div class="top-bar">
+    <div>
+      <div class="logo">Lipid<span>Life</span> — Cardiologist Dashboard</div>
+      <div class="logo-sub">Patient monitoring & progress overview</div>
+    </div>
+    <div class="top-actions">
+      <button class="refresh-btn" onclick="refreshData()">↻ Refresh</button>
+      <button class="logout-btn" onclick="doLogout()">Sign out</button>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="stats-row">
+      <div class="stat-card">
+        <div class="stat-val" id="stat-patients">—</div>
+        <div class="stat-label">Active patients</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-val" id="stat-target" style="color:#27814F">—</div>
+        <div class="stat-label">Patients at LDL target</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-val" id="stat-tasks" style="color:#F5A623">—</div>
+        <div class="stat-label">Total habit completions</div>
+      </div>
+    </div>
+
+    <div class="table-card">
+      <div class="table-header">
+        <div>
+          <div class="table-title">Patient Overview</div>
+          <div class="table-sub">Click any row for full history · LDL shown vs personal target</div>
+        </div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Patient</th>
+            <th>LDL / Target</th>
+            <th>Trend</th>
+            <th>HDL</th>
+            <th>TG</th>
+            <th>Streak</th>
+            <th>Habits</th>
+            <th>Last Test</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="patient-tbody">
+          <tr><td colspan="9" style="text-align:center;padding:40px;color:#888">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- PATIENT DETAIL MODAL -->
+<div class="modal-overlay" id="patient-modal" onclick="if(event.target===this)closePatient()">
+  <div class="modal-box">
+    <div class="modal-title" id="detail-name"></div>
+    <div class="modal-sub-text" id="detail-meta"></div>
+    <div id="detail-flags"></div>
+    <div class="section-hdr">Lab Results History</div>
+    <table style="font-size:12px">
+      <thead><tr>
+        <th>Date</th><th>LDL</th><th>HDL</th><th>Total Chol.</th><th>TG</th><th>Notes</th>
+      </tr></thead>
+      <tbody id="lab-tbody"></tbody>
+    </table>
+    <div class="section-hdr">Habit tracking</div>
+    <div id="detail-tasks" style="font-size:13px;color:#7A8BA8"></div>
+    <br>
+    <button class="close-btn" onclick="closePatient()">Close</button>
+  </div>
+</div>
+
+<!-- SET TARGET MODAL -->
+<div class="modal-overlay" id="target-modal" onclick="if(event.target===this)this.style.display='none'">
+  <div class="modal-box" style="max-width:380px">
+    <div class="modal-title">Set LDL Target</div>
+    <div class="modal-sub-text">Patient: <strong id="st-name"></strong></div>
+    <input type="hidden" id="st-uid">
+    <label class="form-label">LDL Target (mg/dL)</label>
+    <input class="form-input" id="st-ldl" type="number" min="40" max="150">
+    <label class="form-label">Risk Category</label>
+    <select class="form-input" id="st-risk">
+      <option>Low</option><option selected>Moderate</option><option>High</option><option>Very High</option>
+    </select>
+    <br>
+    <button class="save-btn" onclick="saveTarget()">Save Target</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+</body>
+</html>
