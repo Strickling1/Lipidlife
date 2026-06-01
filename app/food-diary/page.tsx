@@ -75,11 +75,12 @@ export default function FoodDiaryPage() {
     const weekAgo = subDays(new Date(), 7).toISOString().split("T")[0];
     const q = query(
       collection(db, "foodEntries"),
-      where("userId", "==", user.uid),
-      where("date", ">=", weekAgo)
+      where("userId", "==", user.uid)
     );
     const snap = await getDocs(q);
-    const foods = snap.docs.map((d) => ({ id: d.id, ...d.data() } as FoodEntry));
+    const foods = snap.docs
+      .map((d) => ({ id: d.id, ...d.data() } as FoodEntry))
+      .filter((f) => f.date >= weekAgo); // Filter date client-side
     // Sort client-side to avoid composite index
     foods.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     setEntries(foods);

@@ -77,11 +77,12 @@ export default function MedicationsPage() {
     if (!user || !db) return;
     const q = query(
       collection(db, "medications"),
-      where("userId", "==", user.uid),
-      where("active", "==", true)
+      where("userId", "==", user.uid)
     );
     const snap = await getDocs(q);
-    const meds = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Medication));
+    const meds = snap.docs
+      .map((d) => ({ id: d.id, ...d.data() } as Medication))
+      .filter((m) => m.active !== false); // Filter active client-side
     // Sort client-side to avoid composite index
     meds.sort((a, b) => new Date(b.createdAt?.seconds * 1000 || 0).getTime() - new Date(a.createdAt?.seconds * 1000 || 0).getTime());
     setMedications(meds);

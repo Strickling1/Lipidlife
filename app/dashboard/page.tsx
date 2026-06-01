@@ -78,11 +78,13 @@ export default function DashboardPage() {
     const today = new Date().toISOString().split("T")[0];
     const q = query(
       collection(db, "taskLog"),
-      where("userId", "==", user.uid),
-      where("date", "==", today)
+      where("userId", "==", user.uid)
     );
     const snap = await getDocs(q);
-    setTaskLog(snap.docs.map((d) => ({ id: d.id, ...d.data() } as TaskLog)));
+    const todayTasks = snap.docs
+      .map((d) => ({ id: d.id, ...d.data() } as TaskLog))
+      .filter((t) => t.date === today); // Filter today client-side
+    setTaskLog(todayTasks);
   }, [user]);
 
   const loadStreak = useCallback(async () => {
