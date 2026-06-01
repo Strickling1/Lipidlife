@@ -77,14 +77,12 @@ export default function DoctorDashboard() {
       const userData = { id: userDoc.id, ...userDoc.data() } as UserProfile;
       
       // Get latest lab for each patient
-      const labsQ = query(
-        collection(db, "labResults"),
-        orderBy("testDate", "desc")
-      );
+      const labsQ = query(collection(db, "labResults"));
       const labsSnap = await getDocs(labsQ);
       const userLabs = labsSnap.docs
         .filter((d) => d.data().userId === userDoc.id)
-        .map((d) => ({ id: d.id, ...d.data() } as LabResult));
+        .map((d) => ({ id: d.id, ...d.data() } as LabResult))
+        .sort((a, b) => new Date(b.testDate).getTime() - new Date(a.testDate).getTime());
       
       patientList.push({
         ...userData,
@@ -98,11 +96,12 @@ export default function DoctorDashboard() {
   const selectPatient = async (patient: UserProfile & { latestLab?: LabResult }) => {
     if (!db) return;
     // Load all labs for this patient
-    const labsQ = query(collection(db, "labResults"), orderBy("testDate", "desc"));
+    const labsQ = query(collection(db, "labResults"));
     const labsSnap = await getDocs(labsQ);
     const labs = labsSnap.docs
       .filter((d) => d.data().userId === patient.id)
-      .map((d) => ({ id: d.id, ...d.data() } as LabResult));
+      .map((d) => ({ id: d.id, ...d.data() } as LabResult))
+      .sort((a, b) => new Date(b.testDate).getTime() - new Date(a.testDate).getTime());
     
     setSelectedPatient({ ...patient, labs });
   };

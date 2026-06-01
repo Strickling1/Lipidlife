@@ -76,11 +76,13 @@ export default function FoodDiaryPage() {
     const q = query(
       collection(db, "foodEntries"),
       where("userId", "==", user.uid),
-      where("date", ">=", weekAgo),
-      orderBy("date", "desc")
+      where("date", ">=", weekAgo)
     );
     const snap = await getDocs(q);
-    setEntries(snap.docs.map((d) => ({ id: d.id, ...d.data() } as FoodEntry)));
+    const foods = snap.docs.map((d) => ({ id: d.id, ...d.data() } as FoodEntry));
+    // Sort client-side to avoid composite index
+    foods.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    setEntries(foods);
   }, [user]);
 
   useEffect(() => {

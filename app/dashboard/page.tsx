@@ -64,11 +64,13 @@ export default function DashboardPage() {
     if (!user || !db) return;
     const q = query(
       collection(db, "labResults"),
-      where("userId", "==", user.uid),
-      orderBy("testDate", "desc")
+      where("userId", "==", user.uid)
     );
     const snap = await getDocs(q);
-    setLabResults(snap.docs.map((d) => ({ id: d.id, ...d.data() } as LabResult)));
+    const results = snap.docs.map((d) => ({ id: d.id, ...d.data() } as LabResult));
+    // Sort client-side to avoid needing composite index
+    results.sort((a, b) => new Date(b.testDate).getTime() - new Date(a.testDate).getTime());
+    setLabResults(results);
   }, [user]);
 
   const loadTaskLog = useCallback(async () => {
@@ -87,8 +89,7 @@ export default function DashboardPage() {
     if (!user || !db) return;
     const q = query(
       collection(db, "taskLog"),
-      where("userId", "==", user.uid),
-      orderBy("date", "desc")
+      where("userId", "==", user.uid)
     );
     const snap = await getDocs(q);
     const dates = [...new Set(snap.docs.map((d) => d.data().date))].sort().reverse();

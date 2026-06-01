@@ -78,11 +78,13 @@ export default function MedicationsPage() {
     const q = query(
       collection(db, "medications"),
       where("userId", "==", user.uid),
-      where("active", "==", true),
-      orderBy("createdAt", "desc")
+      where("active", "==", true)
     );
     const snap = await getDocs(q);
-    setMedications(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Medication)));
+    const meds = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Medication));
+    // Sort client-side to avoid composite index
+    meds.sort((a, b) => new Date(b.createdAt?.seconds * 1000 || 0).getTime() - new Date(a.createdAt?.seconds * 1000 || 0).getTime());
+    setMedications(meds);
   }, [user]);
 
   const loadTodayLogs = useCallback(async () => {
@@ -99,6 +101,14 @@ export default function MedicationsPage() {
 
   const loadAdherenceHistory = useCallback(async () => {
     if (!user || !db || medications.length === 0) return;
+    // Get all medication logs for this user
+    const q = query(
+      collection(db, "medicationLogs"),
+      where("userId", "==", user.uid)
+    );
+    const snap = await getDocs(q);
+    const allLogs = snap.docs.map((d) => d.data());
+    
     // Calculate adherence for last 7 days
     const data: { date: string; adherence: number }[] = [];
     for (let i = 6; i >= 0; i--) {
@@ -108,15 +118,13 @@ export default function MedicationsPage() {
       const dayStart = startOfDay(date);
       const dayEnd = new Date(dayStart);
       dayEnd.setDate(dayEnd.getDate() + 1);
-
-      const q = query(
-        collection(db, "medicationLogs"),
-        where("userId", "==", user.uid),
-        where("takenAt", ">=", dayStart),
-        where("takenAt", "<", dayEnd)
-      );
-      const snap = await getDocs(q);
-      const takenCount = snap.docs.filter((d) => !d.data().skipped).length;
+      
+      // Filter logs for this day client-side
+      const dayLogs = allLogs.filter((log) => {
+        const logTime = log.takenAt?.toDate?.() || new Date(log.takenAt);
+        return logTime >= dayStart && logTime < dayEnd;
+      });
+      const takenCount = dayLogs.filter((d) => !d.skipped).length;
       const adherence = medications.length > 0 ? Math.round((takenCount / medications.length) * 100) : 0;
       data.push({ date: dateStr, adherence });
     }
