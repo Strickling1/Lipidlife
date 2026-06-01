@@ -12,7 +12,7 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 
-// Check if Firebase is properly configured (rebuild trigger v2)
+// Check if Firebase is properly configured (rebuild trigger v3)
 const isFirebaseConfigured = Boolean(
   firebaseConfig.apiKey &&
   firebaseConfig.authDomain &&
