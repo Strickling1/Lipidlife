@@ -28,36 +28,38 @@ let messaging: Messaging | null = null;
 function initializeFirebase() {
   if (!isFirebaseConfigured) {
     console.warn(
-      "Firebase is not configured. Please add the following environment variables:\n" +
-      "- NEXT_PUBLIC_FIREBASE_API_KEY\n" +
-      "- NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN\n" +
-      "- NEXT_PUBLIC_FIREBASE_PROJECT_ID\n" +
-      "- NEXT_PUBLIC_FIREBASE_APP_ID"
+      "[v0] Firebase is not configured. Config values:",
+      JSON.stringify({
+        apiKey: firebaseConfig.apiKey ? "SET" : "MISSING",
+        authDomain: firebaseConfig.authDomain ? "SET" : "MISSING",
+        projectId: firebaseConfig.projectId ? "SET" : "MISSING",
+        appId: firebaseConfig.appId ? "SET" : "MISSING",
+      })
     );
     return;
   }
 
   try {
+    console.log("[v0] Initializing Firebase with project:", firebaseConfig.projectId);
     app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
     auth = getAuth(app);
     db = getFirestore(app);
+    console.log("[v0] Firebase initialized successfully. DB:", db ? "OK" : "NULL");
 
     // Messaging requires browser environment
     if (typeof window !== "undefined" && "Notification" in window) {
       try {
         messaging = getMessaging(app);
       } catch (error) {
-        console.warn("Firebase Messaging not supported:", error);
+        console.warn("[v0] Firebase Messaging not supported:", error);
       }
     }
   } catch (error) {
-    console.error("Firebase initialization error:", error);
+    console.error("[v0] Firebase initialization error:", error);
   }
 }
 
-// Only initialize on client side to avoid SSR issues
-if (typeof window !== "undefined") {
-  initializeFirebase();
-}
+// Initialize immediately - env vars should be inlined at build time for NEXT_PUBLIC_
+initializeFirebase();
 
 export { app, auth, db, messaging, isFirebaseConfigured };

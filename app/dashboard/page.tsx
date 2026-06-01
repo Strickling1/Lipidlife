@@ -144,9 +144,14 @@ export default function DashboardPage() {
       setLabError("Please fill all required fields.");
       return;
     }
-    if (!user || !db) return;
+    console.log("[v0] handleSaveLab - user:", user?.uid, "db:", db ? "OK" : "NULL");
+    if (!user || !db) {
+      setLabError("Not connected to database. Please refresh the page.");
+      return;
+    }
     setLabSaving(true);
     try {
+      console.log("[v0] Attempting to save lab result to Firestore...");
       await addDoc(collection(db, "labResults"), {
         userId: user.uid,
         ldl: parseFloat(labForm.ldl),
@@ -158,10 +163,12 @@ export default function DashboardPage() {
         ldlStatus: parseFloat(labForm.ldl) > (profile?.targetLDL || 100) ? "Above Target" : "On Target",
         createdAt: serverTimestamp(),
       });
+      console.log("[v0] Lab result saved successfully!");
       await loadLabResults();
       setLabModalOpen(false);
       setLabForm({ ldl: "", hdl: "", tc: "", tg: "", date: new Date().toISOString().split("T")[0], notes: "" });
-    } catch {
+    } catch (error) {
+      console.error("[v0] Error saving lab result:", error);
       setLabError("Error saving. Please try again.");
     }
     setLabSaving(false);
