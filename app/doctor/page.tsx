@@ -7,7 +7,7 @@ import {
   signOut as firebaseSignOut,
 } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
-import { collection, query, getDocs, orderBy } from "firebase/firestore";
+import { collection, query, getDocs } from "firebase/firestore";
 import type { UserProfile, LabResult } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
