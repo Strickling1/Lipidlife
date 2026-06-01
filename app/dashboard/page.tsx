@@ -169,7 +169,8 @@ export default function DashboardPage() {
       setLabForm({ ldl: "", hdl: "", tc: "", tg: "", date: new Date().toISOString().split("T")[0], notes: "" });
     } catch (error) {
       console.error("[v0] Error saving lab result:", error);
-      setLabError("Error saving. Please try again.");
+      const errorMsg = error instanceof Error ? error.message : "Unknown error";
+      setLabError(`Error: ${errorMsg}`);
     }
     setLabSaving(false);
   };
