@@ -5,8 +5,6 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import {
   collection,
-  query,
-  where,
   getDocs,
   addDoc,
   serverTimestamp,
@@ -61,39 +59,31 @@ export default function DashboardPage() {
 
   const loadLabResults = useCallback(async () => {
     if (!user || !db) return;
-    const q = query(
-      collection(db, "labResults"),
-      where("userId", "==", user.uid)
-    );
-    const snap = await getDocs(q);
-    const results = snap.docs.map((d) => ({ id: d.id, ...d.data() } as LabResult));
-    // Sort client-side to avoid needing composite index
-    results.sort((a, b) => new Date(b.testDate).getTime() - new Date(a.testDate).getTime());
+    const snap = await getDocs(collection(db, "labResults"));
+    const results = snap.docs
+      .map((d) => ({ id: d.id, ...d.data() } as LabResult))
+      .filter((r) => r.userId === user.uid)
+      .sort((a, b) => new Date(b.testDate).getTime() - new Date(a.testDate).getTime());
     setLabResults(results);
   }, [user]);
 
   const loadTaskLog = useCallback(async () => {
     if (!user || !db) return;
     const today = new Date().toISOString().split("T")[0];
-    const q = query(
-      collection(db, "taskLog"),
-      where("userId", "==", user.uid)
-    );
-    const snap = await getDocs(q);
+    const snap = await getDocs(collection(db, "taskLog"));
     const todayTasks = snap.docs
       .map((d) => ({ id: d.id, ...d.data() } as TaskLog))
-      .filter((t) => t.date === today); // Filter today client-side
+      .filter((t) => t.userId === user.uid && t.date === today);
     setTaskLog(todayTasks);
   }, [user]);
 
   const loadStreak = useCallback(async () => {
     if (!user || !db) return;
-    const q = query(
-      collection(db, "taskLog"),
-      where("userId", "==", user.uid)
-    );
-    const snap = await getDocs(q);
-    const dates = [...new Set(snap.docs.map((d) => d.data().date))].sort().reverse();
+    const snap = await getDocs(collection(db, "taskLog"));
+    const userTasks = snap.docs
+      .map((d) => d.data())
+      .filter((t) => t.userId === user.uid);
+    const dates = [...new Set(userTasks.map((d) => d.date))].sort().reverse();
     let streakCount = 0;
     let check = new Date().toISOString().split("T")[0];
     for (const d of dates) {
