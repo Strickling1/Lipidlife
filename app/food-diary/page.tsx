@@ -5,9 +5,6 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import {
   collection,
-  query,
-  where,
-  orderBy,
   getDocs,
   addDoc,
   deleteDoc,

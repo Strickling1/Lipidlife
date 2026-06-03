@@ -77,8 +77,7 @@ export default function DoctorDashboard() {
       const userData = { id: userDoc.id, ...userDoc.data() } as UserProfile;
       
       // Get latest lab for each patient
-      const labsQ = query(collection(db, "labResults"));
-      const labsSnap = await getDocs(labsQ);
+      const labsSnap = await getDocs(collection(db, "labResults"));
       const userLabs = labsSnap.docs
         .filter((d) => d.data().userId === userDoc.id)
         .map((d) => ({ id: d.id, ...d.data() } as LabResult))
