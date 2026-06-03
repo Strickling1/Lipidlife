@@ -5,9 +5,6 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import {
   collection,
-  query,
-  where,
-  orderBy,
   getDocs,
   addDoc,
   updateDoc,
@@ -89,18 +86,15 @@ export default function AppointmentsPage() {
 
   const loadAppointments = useCallback(async () => {
     if (!user || !db) return;
-    const q = query(
-      collection(db, "appointments"),
-      where("userId", "==", user.uid)
-    );
-    const snap = await getDocs(q);
-    const appts = snap.docs.map((d) => ({
-      id: d.id,
-      ...d.data(),
-      dateTime: d.data().dateTime?.toDate?.() || new Date(d.data().dateTime),
-    } as Appointment));
-    // Sort client-side to avoid composite index
-    appts.sort((a, b) => new Date(a.dateTime).getTime() - new Date(b.dateTime).getTime());
+    const snap = await getDocs(collection(db, "appointments"));
+    const appts = snap.docs
+      .map((d) => ({
+        id: d.id,
+        ...d.data(),
+        dateTime: d.data().dateTime?.toDate?.() || new Date(d.data().dateTime),
+      } as Appointment))
+      .filter((a) => a.userId === user.uid)
+      .sort((a, b) => new Date(a.dateTime).getTime() - new Date(b.dateTime).getTime());
     setAppointments(appts);
   }, [user]);
 

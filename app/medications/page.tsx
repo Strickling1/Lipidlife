@@ -5,9 +5,6 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import {
   collection,
-  query,
-  where,
-  orderBy,
   getDocs,
   addDoc,
   updateDoc,
@@ -75,40 +72,31 @@ export default function MedicationsPage() {
 
   const loadMedications = useCallback(async () => {
     if (!user || !db) return;
-    const q = query(
-      collection(db, "medications"),
-      where("userId", "==", user.uid)
-    );
-    const snap = await getDocs(q);
+    const snap = await getDocs(collection(db, "medications"));
     const meds = snap.docs
       .map((d) => ({ id: d.id, ...d.data() } as Medication))
-      .filter((m) => m.active !== false); // Filter active client-side
-    // Sort client-side to avoid composite index
-    meds.sort((a, b) => new Date(b.createdAt?.seconds * 1000 || 0).getTime() - new Date(a.createdAt?.seconds * 1000 || 0).getTime());
+      .filter((m) => m.userId === user.uid && m.active !== false)
+      .sort((a, b) => new Date(b.createdAt?.seconds * 1000 || 0).getTime() - new Date(a.createdAt?.seconds * 1000 || 0).getTime());
     setMedications(meds);
   }, [user]);
 
   const loadTodayLogs = useCallback(async () => {
     if (!user || !db) return;
     const today = startOfDay(new Date());
-    const q = query(
-      collection(db, "medicationLogs"),
-      where("userId", "==", user.uid),
-      where("takenAt", ">=", today)
-    );
-    const snap = await getDocs(q);
-    setTodayLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() } as MedicationLog)));
+    const snap = await getDocs(collection(db, "medicationLogs"));
+    const logs = snap.docs
+      .map((d) => ({ id: d.id, ...d.data() } as MedicationLog))
+      .filter((l) => {
+        const logTime = l.takenAt?.toDate?.() || new Date(l.takenAt as unknown as string);
+        return l.userId === user.uid && logTime >= today;
+      });
+    setTodayLogs(logs);
   }, [user]);
 
   const loadAdherenceHistory = useCallback(async () => {
     if (!user || !db || medications.length === 0) return;
-    // Get all medication logs for this user
-    const q = query(
-      collection(db, "medicationLogs"),
-      where("userId", "==", user.uid)
-    );
-    const snap = await getDocs(q);
-    const allLogs = snap.docs.map((d) => d.data());
+    const snap = await getDocs(collection(db, "medicationLogs"));
+    const allLogs = snap.docs.map((d) => d.data()).filter((l) => l.userId === user.uid);
     
     // Calculate adherence for last 7 days
     const data: { date: string; adherence: number }[] = [];
