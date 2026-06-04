@@ -7,7 +7,7 @@ import {
   signOut as firebaseSignOut,
 } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
-import { collection, query, getDocs } from "firebase/firestore";
+import { collection, getDocs } from "firebase/firestore";
 import type { UserProfile, LabResult } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -95,8 +95,7 @@ export default function DoctorDashboard() {
   const selectPatient = async (patient: UserProfile & { latestLab?: LabResult }) => {
     if (!db) return;
     // Load all labs for this patient
-    const labsQ = query(collection(db, "labResults"));
-    const labsSnap = await getDocs(labsQ);
+    const labsSnap = await getDocs(collection(db, "labResults"));
     const labs = labsSnap.docs
       .filter((d) => d.data().userId === patient.id)
       .map((d) => ({ id: d.id, ...d.data() } as LabResult))
