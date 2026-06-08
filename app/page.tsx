@@ -1,265 +1,556 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
+import {
+  collection,
+  getDocs,
+  addDoc,
+  query,
+  where,
+  serverTimestamp,
+} from "firebase/firestore";
+import { db } from "@/lib/firebase";
+import type { LabResult, TaskLog } from "@/lib/types";
+import { DAILY_HABITS } from "@/lib/types";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Heart, Shield, TrendingDown, Pill } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { BottomNav } from "@/components/bottom-nav";
+import { RiskRing } from "@/components/risk-ring";
+import { LDLTrendChart } from "@/components/charts/ldl-trend-chart";
+import {
+  Flame,
+  Plus,
+  Check,
+  LogOut,
+  Activity,
+  Droplets,
+  Heart,
+  Zap,
+} from "lucide-react";
 
-export default function AuthPage() {
-  const [loginEmail, setLoginEmail] = useState("");
-  const [loginPassword, setLoginPassword] = useState("");
-  const [registerName, setRegisterName] = useState("");
-  const [registerEmail, setRegisterEmail] = useState("");
-  const [registerPassword, setRegisterPassword] = useState("");
-  const [registerAge, setRegisterAge] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-  const { signIn, signUp, user, loading: authLoading, isConfigured } = useAuth();
+export default function DashboardPage() {
+  const { user, profile, loading, signOut } = useAuth();
   const router = useRouter();
+  const [labResults, setLabResults] = useState<LabResult[]>([]);
+  const [taskLog, setTaskLog] = useState<TaskLog[]>([]);
+  const [streak, setStreak] = useState(0);
+  const [labModalOpen, setLabModalOpen] = useState(false);
+  const [labForm, setLabForm] = useState({
+    ldl: "",
+    hdl: "",
+    tc: "",
+    tg: "",
+    date: new Date().toISOString().split("T")[0],
+    notes: "",
+  });
+  const [labError, setLabError] = useState("");
+  const [labSaving, setLabSaving] = useState(false);
 
-  // Redirect if already logged in
-  if (!authLoading && user) {
-    router.push("/dashboard");
-    return null;
-  }
-
-  // Show configuration message if Firebase is not set up
-  if (!authLoading && !isConfigured) {
-    return (
-      <div className="flex min-h-screen flex-col bg-primary">
-        <div className="flex flex-col items-center pt-12 pb-8 px-6">
-          <div className="font-serif text-4xl text-primary-foreground">
-            Lipid<span className="text-warning">Life</span>
-          </div>
-        </div>
-        <div className="flex-1 rounded-t-3xl bg-background px-6 pt-6 pb-8">
-          <Card className="mx-auto max-w-md">
-            <CardHeader>
-              <CardTitle className="text-center">Configuration Required</CardTitle>
-              <CardDescription className="text-center">
-                Firebase is not configured. Please add the following environment variables to your Vercel project:
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ul className="list-disc pl-6 text-sm text-muted-foreground flex flex-col gap-1">
-                <li>NEXT_PUBLIC_FIREBASE_API_KEY</li>
-                <li>NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN</li>
-                <li>NEXT_PUBLIC_FIREBASE_PROJECT_ID</li>
-                <li>NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET</li>
-                <li>NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID</li>
-                <li>NEXT_PUBLIC_FIREBASE_APP_ID</li>
-              </ul>
-              <p className="mt-4 text-sm text-muted-foreground">
-                Get these values from your Firebase Console under Project Settings.
-              </p>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
+  // FIX 1: Use Firestore `where` query to only fetch the current user's documents.
+  // Previously, the entire collection was fetched and filtered client-side, which
+  // fails when Firestore security rules (correctly) block reading other users' data.
+  const loadLabResults = useCallback(async () => {
+    if (!user || !db) return;
+    const q = query(
+      collection(db, "labResults"),
+      where("userId", "==", user.uid)
     );
-  }
+    const snap = await getDocs(q);
+    const results = snap.docs
+      .map((d) => ({ id: d.id, ...d.data() } as LabResult))
+      .sort(
+        (a, b) =>
+          new Date(b.testDate).getTime() - new Date(a.testDate).getTime()
+      );
+    setLabResults(results);
+  }, [user]);
 
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError("");
-    setLoading(true);
-    try {
-      await signIn(loginEmail, loginPassword);
-      router.push("/dashboard");
-    } catch {
-      setError("Incorrect email or password.");
-    }
-    setLoading(false);
-  };
+  // FIX 1 (same): Scope taskLog query to the current user and today's date.
+  const loadTaskLog = useCallback(async () => {
+    if (!user || !db) return;
+    const today = new Date().toISOString().split("T")[0];
+    const q = query(
+      collection(db, "taskLog"),
+      where("userId", "==", user.uid),
+      where("date", "==", today)
+    );
+    const snap = await getDocs(q);
+    const todayTasks = snap.docs.map(
+      (d) => ({ id: d.id, ...d.data() } as TaskLog)
+    );
+    setTaskLog(todayTasks);
+  }, [user]);
 
-  const handleRegister = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError("");
-    if (!registerName || !registerEmail || !registerPassword || !registerAge) {
-      setError("Please fill all fields.");
-      return;
-    }
-    setLoading(true);
-    try {
-      await signUp(registerEmail, registerPassword, registerName, parseInt(registerAge));
-      router.push("/dashboard");
-    } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : "Registration failed.";
-      if (errorMessage.includes("email-already")) {
-        setError("Email already registered.");
+  // FIX 2: Fix streak calculation.
+  // Previously, any single task completed on a day counted that day toward the streak.
+  // Now we require at least one habit completed per day, and walk backwards from today.
+  const loadStreak = useCallback(async () => {
+    if (!user || !db) return;
+    const q = query(
+      collection(db, "taskLog"),
+      where("userId", "==", user.uid)
+    );
+    const snap = await getDocs(q);
+
+    // Build a Set of dates that have at least one completed task
+    const completedDates = new Set(
+      snap.docs.map((d) => d.data().date as string)
+    );
+
+    // Walk backwards from today counting consecutive days
+    let streakCount = 0;
+    const checkDate = new Date();
+    // Allow today to count even if not yet completed (only break on missing past days)
+    for (let i = 0; i < 365; i++) {
+      const dateStr = checkDate.toISOString().split("T")[0];
+      if (completedDates.has(dateStr)) {
+        streakCount++;
+        checkDate.setDate(checkDate.getDate() - 1);
+      } else if (i === 0) {
+        // Today not yet done — start checking from yesterday
+        checkDate.setDate(checkDate.getDate() - 1);
       } else {
-        setError("Registration failed. Please try again.");
+        // Gap found — streak is broken
+        break;
       }
     }
-    setLoading(false);
+    setStreak(streakCount);
+  }, [user]);
+
+  useEffect(() => {
+    if (!loading && !user) {
+      router.push("/");
+    }
+  }, [user, loading, router]);
+
+  useEffect(() => {
+    if (user) {
+      loadLabResults();
+      loadTaskLog();
+      loadStreak();
+    }
+  }, [user, loadLabResults, loadTaskLog, loadStreak]);
+
+  const handleCompleteTask = async (
+    taskId: string,
+    taskName: string,
+    points: number
+  ) => {
+    // FIX 3: Show a clear error if db is not available instead of silently failing.
+    if (!user || !db) {
+      console.error("[LipidLife] Cannot complete task: database not connected.");
+      return;
+    }
+    if (taskLog.find((t) => t.taskId === taskId)) return;
+
+    const today = new Date().toISOString().split("T")[0];
+    await addDoc(collection(db, "taskLog"), {
+      userId: user.uid,
+      taskId,
+      taskName,
+      date: today,
+      completed: true,
+      pointsEarned: points,
+      createdAt: serverTimestamp(),
+    });
+    setTaskLog((prev) => [
+      ...prev,
+      {
+        id: "",
+        userId: user.uid,
+        taskId,
+        taskName,
+        date: today,
+        completed: true,
+        pointsEarned: points,
+        createdAt: new Date(),
+      },
+    ]);
+    loadStreak();
   };
 
-  if (authLoading) {
+  const handleSaveLab = async () => {
+    setLabError("");
+    if (
+      !labForm.ldl ||
+      !labForm.hdl ||
+      !labForm.tc ||
+      !labForm.tg ||
+      !labForm.date
+    ) {
+      setLabError("Please fill all required fields.");
+      return;
+    }
+    if (!user || !db) {
+      setLabError("Not connected to database. Please refresh the page.");
+      return;
+    }
+    setLabSaving(true);
+    try {
+      await addDoc(collection(db, "labResults"), {
+        userId: user.uid,
+        ldl: parseFloat(labForm.ldl),
+        hdl: parseFloat(labForm.hdl),
+        totalCholesterol: parseFloat(labForm.tc),
+        triglycerides: parseFloat(labForm.tg),
+        testDate: labForm.date,
+        notes: labForm.notes,
+        ldlStatus:
+          parseFloat(labForm.ldl) > (profile?.targetLDL || 100)
+            ? "Above Target"
+            : "On Target",
+        createdAt: serverTimestamp(),
+      });
+      await loadLabResults();
+      setLabModalOpen(false);
+      setLabForm({
+        ldl: "",
+        hdl: "",
+        tc: "",
+        tg: "",
+        date: new Date().toISOString().split("T")[0],
+        notes: "",
+      });
+    } catch (error) {
+      console.error("[LipidLife] Error saving lab result:", error);
+      const errorMsg = error instanceof Error ? error.message : "Unknown error";
+      setLabError(`Error: ${errorMsg}`);
+    }
+    setLabSaving(false);
+  };
+
+  if (loading || !user || !profile) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-primary">
+      <div className="flex min-h-screen items-center justify-center">
         <div className="text-center">
-          <div className="font-serif text-3xl text-primary-foreground">
-            Lipid<span className="text-warning">Life</span>
-          </div>
-          <p className="mt-2 text-sm text-primary-foreground/70">Loading...</p>
+          <div className="font-serif text-2xl">Loading...</div>
         </div>
       </div>
     );
   }
 
+  const latestLab = labResults[0];
+  const completedTasks = taskLog.map((t) => t.taskId);
+  const taskProgress = (completedTasks.length / DAILY_HABITS.length) * 100;
+  const firstName = profile.name?.split(" ")[0] || "there";
+
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour < 12) return "Good morning";
+    if (hour < 18) return "Good afternoon";
+    return "Good evening";
+  };
+
   return (
-    <div className="flex min-h-screen flex-col bg-primary">
+    <div className="flex min-h-screen flex-col bg-background pb-20">
       {/* Header */}
-      <div className="flex flex-col items-center pt-12 pb-8 px-6">
-        <div className="font-serif text-4xl text-primary-foreground">
-          Lipid<span className="text-warning">Life</span>
-        </div>
-        <p className="mt-2 text-sm text-primary-foreground/70 text-center">
-          Your personalised cholesterol coach
-        </p>
-      </div>
-
-      {/* Features */}
-      <div className="grid grid-cols-2 gap-3 px-6 pb-8 max-w-md mx-auto w-full">
-        <div className="flex items-center gap-2 rounded-lg bg-primary-foreground/10 p-3">
-          <Heart className="size-5 text-warning" />
-          <span className="text-xs text-primary-foreground/80">Track Labs</span>
-        </div>
-        <div className="flex items-center gap-2 rounded-lg bg-primary-foreground/10 p-3">
-          <Pill className="size-5 text-teal" />
-          <span className="text-xs text-primary-foreground/80">Medications</span>
-        </div>
-        <div className="flex items-center gap-2 rounded-lg bg-primary-foreground/10 p-3">
-          <TrendingDown className="size-5 text-success" />
-          <span className="text-xs text-primary-foreground/80">Lower LDL</span>
-        </div>
-        <div className="flex items-center gap-2 rounded-lg bg-primary-foreground/10 p-3">
-          <Shield className="size-5 text-destructive" />
-          <span className="text-xs text-primary-foreground/80">Reduce Risk</span>
-        </div>
-      </div>
-
-      {/* Auth Card */}
-      <div className="flex-1 rounded-t-3xl bg-background px-6 pt-6 pb-8">
-        <Card className="mx-auto max-w-md border-0 shadow-none">
-          <CardHeader className="px-0 pt-0">
-            <CardTitle className="text-center">Welcome</CardTitle>
-            <CardDescription className="text-center">
-              Sign in to continue your health journey
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="px-0">
-            <Tabs defaultValue="login" className="w-full">
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="login">Sign In</TabsTrigger>
-                <TabsTrigger value="register">Register</TabsTrigger>
-              </TabsList>
-              
-              <TabsContent value="login" className="mt-4">
-                <form onSubmit={handleLogin} className="flex flex-col gap-4">
-                  <div className="flex flex-col gap-2">
-                    <Label htmlFor="login-email">Email</Label>
-                    <Input
-                      id="login-email"
-                      type="email"
-                      placeholder="you@example.com"
-                      value={loginEmail}
-                      onChange={(e) => setLoginEmail(e.target.value)}
-                      required
-                    />
-                  </div>
-                  <div className="flex flex-col gap-2">
-                    <Label htmlFor="login-password">Password</Label>
-                    <Input
-                      id="login-password"
-                      type="password"
-                      placeholder="Your password"
-                      value={loginPassword}
-                      onChange={(e) => setLoginPassword(e.target.value)}
-                      required
-                    />
-                  </div>
-                  {error && <p className="text-sm text-destructive">{error}</p>}
-                  <Button type="submit" disabled={loading} className="w-full">
-                    {loading ? "Signing in..." : "Sign In"}
-                  </Button>
-                </form>
-              </TabsContent>
-              
-              <TabsContent value="register" className="mt-4">
-                <form onSubmit={handleRegister} className="flex flex-col gap-4">
-                  <div className="flex flex-col gap-2">
-                    <Label htmlFor="register-name">Full Name</Label>
-                    <Input
-                      id="register-name"
-                      type="text"
-                      placeholder="John Smith"
-                      value={registerName}
-                      onChange={(e) => setRegisterName(e.target.value)}
-                      required
-                    />
-                  </div>
-                  <div className="flex flex-col gap-2">
-                    <Label htmlFor="register-email">Email</Label>
-                    <Input
-                      id="register-email"
-                      type="email"
-                      placeholder="you@example.com"
-                      value={registerEmail}
-                      onChange={(e) => setRegisterEmail(e.target.value)}
-                      required
-                    />
-                  </div>
-                  <div className="flex flex-col gap-2">
-                    <Label htmlFor="register-password">Password</Label>
-                    <Input
-                      id="register-password"
-                      type="password"
-                      placeholder="Min 6 characters"
-                      value={registerPassword}
-                      onChange={(e) => setRegisterPassword(e.target.value)}
-                      required
-                      minLength={6}
-                    />
-                  </div>
-                  <div className="flex flex-col gap-2">
-                    <Label htmlFor="register-age">Age</Label>
-                    <Input
-                      id="register-age"
-                      type="number"
-                      placeholder="Your age"
-                      value={registerAge}
-                      onChange={(e) => setRegisterAge(e.target.value)}
-                      required
-                      min={18}
-                      max={120}
-                    />
-                  </div>
-                  {error && <p className="text-sm text-destructive">{error}</p>}
-                  <Button type="submit" disabled={loading} className="w-full">
-                    {loading ? "Creating account..." : "Create Account"}
-                  </Button>
-                </form>
-              </TabsContent>
-            </Tabs>
-          </CardContent>
-        </Card>
-        
-        {/* Doctor login link */}
-        <div className="mt-6 text-center">
-          <a
-            href="/doctor"
-            className="text-sm text-muted-foreground hover:text-foreground"
+      <header className="bg-primary px-5 pt-4 pb-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm text-primary-foreground/70">{getGreeting()},</p>
+            <h1 className="font-serif text-2xl text-primary-foreground">
+              {firstName}{" "}
+              <span className="text-warning">
+                {profile.name?.split(" ").slice(1).join(" ")}
+              </span>
+            </h1>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={signOut}
+            className="border-primary-foreground/20 bg-transparent text-primary-foreground/70 hover:bg-primary-foreground/10"
           >
-            Cardiologist? Access the dashboard
-          </a>
+            <LogOut className="size-4" />
+          </Button>
         </div>
+      </header>
+
+      {/* Risk Ring */}
+      <div className="bg-primary px-5 pb-6">
+        <RiskRing
+          riskCategory={profile.riskCategory}
+          targetLDL={profile.targetLDL}
+          currentLDL={latestLab?.ldl}
+        />
       </div>
+
+      {/* Main Content */}
+      <main className="flex-1 px-4 py-4">
+        <div className="flex flex-col gap-4">
+          {/* Streak */}
+          <Card className="bg-primary/10 border-primary/20">
+            <CardContent className="flex items-center gap-4 p-4">
+              <div className="flex size-12 items-center justify-center rounded-full bg-warning/20">
+                <Flame className="size-6 text-warning" />
+              </div>
+              <div>
+                <div className="font-serif text-3xl text-warning">{streak}</div>
+                <p className="text-sm text-muted-foreground">
+                  day streak - keep it going!
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Latest Results */}
+          <div className="flex flex-col gap-2">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Latest Blood Results
+            </h2>
+            <div className="grid grid-cols-2 gap-3">
+              <Card>
+                <CardContent className="p-4">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Droplets className="size-3" />
+                    LDL Cholesterol
+                  </div>
+                  <div className="mt-1 font-serif text-3xl">
+                    {latestLab?.ldl || "-"}
+                  </div>
+                  <div className="text-xs text-muted-foreground">mg/dL</div>
+                  {latestLab && (
+                    <span
+                      className={`mt-2 inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${
+                        latestLab.ldl <= profile.targetLDL
+                          ? "bg-success/20 text-success"
+                          : "bg-destructive/20 text-destructive"
+                      }`}
+                    >
+                      {latestLab.ldl <= profile.targetLDL
+                        ? "On target"
+                        : "Above target"}
+                    </span>
+                  )}
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="p-4">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Heart className="size-3" />
+                    HDL Cholesterol
+                  </div>
+                  <div className="mt-1 font-serif text-3xl">
+                    {latestLab?.hdl || "-"}
+                  </div>
+                  <div className="text-xs text-muted-foreground">mg/dL</div>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="p-4">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Zap className="size-3" />
+                    Triglycerides
+                  </div>
+                  <div className="mt-1 font-serif text-3xl">
+                    {latestLab?.triglycerides || "-"}
+                  </div>
+                  <div className="text-xs text-muted-foreground">mg/dL</div>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="p-4">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Activity className="size-3" />
+                    Total Cholesterol
+                  </div>
+                  <div className="mt-1 font-serif text-3xl">
+                    {latestLab?.totalCholesterol || "-"}
+                  </div>
+                  <div className="text-xs text-muted-foreground">mg/dL</div>
+                </CardContent>
+              </Card>
+            </div>
+            <div className="text-right text-xs text-muted-foreground">
+              {latestLab ? `Latest: ${latestLab.testDate}` : "No results yet"}
+            </div>
+            <Button onClick={() => setLabModalOpen(true)} className="w-full">
+              <Plus className="size-4" />
+              Add New Lab Result
+            </Button>
+          </div>
+
+          {/* LDL Trend Chart */}
+          {labResults.length >= 2 && (
+            <div className="flex flex-col gap-2">
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                LDL Trend
+              </h2>
+              <LDLTrendChart
+                labResults={labResults}
+                targetLDL={profile.targetLDL}
+              />
+            </div>
+          )}
+
+          {/* Today's Habits */}
+          <div className="flex flex-col gap-2">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Today&apos;s Habits
+            </h2>
+            <Card>
+              <CardHeader className="pb-2">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-sm font-semibold">
+                    Daily Checklist
+                  </CardTitle>
+                  <span className="text-xs text-muted-foreground">
+                    {completedTasks.length} of {DAILY_HABITS.length} done
+                  </span>
+                </div>
+                <Progress
+                  value={taskProgress}
+                  className="h-1"
+                  indicatorClassName="bg-success"
+                />
+              </CardHeader>
+              <CardContent className="p-0">
+                {DAILY_HABITS.map((task) => {
+                  const isCompleted = completedTasks.includes(task.id);
+                  return (
+                    <button
+                      key={task.id}
+                      onClick={() =>
+                        handleCompleteTask(task.id, task.name, task.points)
+                      }
+                      disabled={isCompleted}
+                      className={`flex w-full items-center gap-3 border-t border-border px-4 py-3 text-left transition-opacity ${
+                        isCompleted ? "opacity-60" : "hover:bg-muted/50"
+                      }`}
+                    >
+                      <div
+                        className={`flex size-6 shrink-0 items-center justify-center rounded-full border-2 ${
+                          isCompleted
+                            ? "border-success bg-success text-success-foreground"
+                            : "border-muted-foreground"
+                        }`}
+                      >
+                        {isCompleted && <Check className="size-4" />}
+                      </div>
+                      <span
+                        className={`flex-1 text-sm ${
+                          isCompleted
+                            ? "line-through text-muted-foreground"
+                            : ""
+                        }`}
+                      >
+                        {task.name}
+                      </span>
+                      <span className="text-xs font-semibold text-warning">
+                        +{task.points} pts
+                      </span>
+                    </button>
+                  );
+                })}
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      </main>
+
+      {/* Bottom Navigation */}
+      <BottomNav />
+
+      {/* Lab Result Modal */}
+      <Dialog open={labModalOpen} onOpenChange={setLabModalOpen}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Add Lab Result</DialogTitle>
+            <DialogDescription>
+              Enter your latest cholesterol panel values
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="ldl">LDL (mg/dL) *</Label>
+                <Input
+                  id="ldl"
+                  type="number"
+                  value={labForm.ldl}
+                  onChange={(e) =>
+                    setLabForm({ ...labForm, ldl: e.target.value })
+                  }
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="hdl">HDL (mg/dL) *</Label>
+                <Input
+                  id="hdl"
+                  type="number"
+                  value={labForm.hdl}
+                  onChange={(e) =>
+                    setLabForm({ ...labForm, hdl: e.target.value })
+                  }
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="tc">Total Chol. (mg/dL) *</Label>
+                <Input
+                  id="tc"
+                  type="number"
+                  value={labForm.tc}
+                  onChange={(e) =>
+                    setLabForm({ ...labForm, tc: e.target.value })
+                  }
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="tg">Triglycerides (mg/dL) *</Label>
+                <Input
+                  id="tg"
+                  type="number"
+                  value={labForm.tg}
+                  onChange={(e) =>
+                    setLabForm({ ...labForm, tg: e.target.value })
+                  }
+                />
+              </div>
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="date">Test Date *</Label>
+              <Input
+                id="date"
+                type="date"
+                value={labForm.date}
+                onChange={(e) =>
+                  setLabForm({ ...labForm, date: e.target.value })
+                }
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="notes">Notes (optional)</Label>
+              <Textarea
+                id="notes"
+                value={labForm.notes}
+                onChange={(e) =>
+                  setLabForm({ ...labForm, notes: e.target.value })
+                }
+                placeholder="Any notes about this test..."
+              />
+            </div>
+            {labError && (
+              <p className="text-sm text-destructive">{labError}</p>
+            )}
+            <Button onClick={handleSaveLab} disabled={labSaving}>
+              {labSaving ? "Saving..." : "Save Result"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
