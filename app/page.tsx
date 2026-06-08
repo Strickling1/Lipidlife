@@ -7,8 +7,6 @@ import {
   collection,
   getDocs,
   addDoc,
-  query,
-  where,
   serverTimestamp,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
@@ -59,73 +57,42 @@ export default function DashboardPage() {
   const [labError, setLabError] = useState("");
   const [labSaving, setLabSaving] = useState(false);
 
-  // FIX 1: Use Firestore `where` query to only fetch the current user's documents.
-  // Previously, the entire collection was fetched and filtered client-side, which
-  // fails when Firestore security rules (correctly) block reading other users' data.
   const loadLabResults = useCallback(async () => {
     if (!user || !db) return;
-    const q = query(
-      collection(db, "labResults"),
-      where("userId", "==", user.uid)
-    );
-    const snap = await getDocs(q);
+    const snap = await getDocs(collection(db, "labResults"));
     const results = snap.docs
       .map((d) => ({ id: d.id, ...d.data() } as LabResult))
-      .sort(
-        (a, b) =>
-          new Date(b.testDate).getTime() - new Date(a.testDate).getTime()
-      );
+      .filter((r) => r.userId === user.uid)
+      .sort((a, b) => new Date(b.testDate).getTime() - new Date(a.testDate).getTime());
     setLabResults(results);
   }, [user]);
 
-  // FIX 1 (same): Scope taskLog query to the current user and today's date.
   const loadTaskLog = useCallback(async () => {
     if (!user || !db) return;
     const today = new Date().toISOString().split("T")[0];
-    const q = query(
-      collection(db, "taskLog"),
-      where("userId", "==", user.uid),
-      where("date", "==", today)
-    );
-    const snap = await getDocs(q);
-    const todayTasks = snap.docs.map(
-      (d) => ({ id: d.id, ...d.data() } as TaskLog)
-    );
+    const snap = await getDocs(collection(db, "taskLog"));
+    const todayTasks = snap.docs
+      .map((d) => ({ id: d.id, ...d.data() } as TaskLog))
+      .filter((t) => t.userId === user.uid && t.date === today);
     setTaskLog(todayTasks);
   }, [user]);
 
-  // FIX 2: Fix streak calculation.
-  // Previously, any single task completed on a day counted that day toward the streak.
-  // Now we require at least one habit completed per day, and walk backwards from today.
   const loadStreak = useCallback(async () => {
     if (!user || !db) return;
-    const q = query(
-      collection(db, "taskLog"),
-      where("userId", "==", user.uid)
-    );
-    const snap = await getDocs(q);
-
-    // Build a Set of dates that have at least one completed task
-    const completedDates = new Set(
-      snap.docs.map((d) => d.data().date as string)
-    );
-
-    // Walk backwards from today counting consecutive days
+    const snap = await getDocs(collection(db, "taskLog"));
+    const userTasks = snap.docs
+      .map((d) => d.data())
+      .filter((t) => t.userId === user.uid);
+    const dates = [...new Set(userTasks.map((d) => d.date))].sort().reverse();
     let streakCount = 0;
-    const checkDate = new Date();
-    // Allow today to count even if not yet completed (only break on missing past days)
-    for (let i = 0; i < 365; i++) {
-      const dateStr = checkDate.toISOString().split("T")[0];
-      if (completedDates.has(dateStr)) {
+    let check = new Date().toISOString().split("T")[0];
+    for (const d of dates) {
+      if (d === check) {
         streakCount++;
-        checkDate.setDate(checkDate.getDate() - 1);
-      } else if (i === 0) {
-        // Today not yet done — start checking from yesterday
-        checkDate.setDate(checkDate.getDate() - 1);
-      } else {
-        // Gap found — streak is broken
-        break;
-      }
+        const dt = new Date(check);
+        dt.setDate(dt.getDate() - 1);
+        check = dt.toISOString().split("T")[0];
+      } else break;
     }
     setStreak(streakCount);
   }, [user]);
@@ -144,18 +111,8 @@ export default function DashboardPage() {
     }
   }, [user, loadLabResults, loadTaskLog, loadStreak]);
 
-  const handleCompleteTask = async (
-    taskId: string,
-    taskName: string,
-    points: number
-  ) => {
-    // FIX 3: Show a clear error if db is not available instead of silently failing.
-    if (!user || !db) {
-      console.error("[LipidLife] Cannot complete task: database not connected.");
-      return;
-    }
-    if (taskLog.find((t) => t.taskId === taskId)) return;
-
+  const handleCompleteTask = async (taskId: string, taskName: string, points: number) => {
+    if (!user || !db || taskLog.find((t) => t.taskId === taskId)) return;
     const today = new Date().toISOString().split("T")[0];
     await addDoc(collection(db, "taskLog"), {
       userId: user.uid,
@@ -168,38 +125,25 @@ export default function DashboardPage() {
     });
     setTaskLog((prev) => [
       ...prev,
-      {
-        id: "",
-        userId: user.uid,
-        taskId,
-        taskName,
-        date: today,
-        completed: true,
-        pointsEarned: points,
-        createdAt: new Date(),
-      },
+      { id: "", userId: user.uid, taskId, taskName, date: today, completed: true, pointsEarned: points, createdAt: new Date() },
     ]);
     loadStreak();
   };
 
   const handleSaveLab = async () => {
     setLabError("");
-    if (
-      !labForm.ldl ||
-      !labForm.hdl ||
-      !labForm.tc ||
-      !labForm.tg ||
-      !labForm.date
-    ) {
+    if (!labForm.ldl || !labForm.hdl || !labForm.tc || !labForm.tg || !labForm.date) {
       setLabError("Please fill all required fields.");
       return;
     }
+    console.log("[v0] handleSaveLab - user:", user?.uid, "db:", db ? "OK" : "NULL");
     if (!user || !db) {
       setLabError("Not connected to database. Please refresh the page.");
       return;
     }
     setLabSaving(true);
     try {
+      console.log("[v0] Attempting to save lab result to Firestore...");
       await addDoc(collection(db, "labResults"), {
         userId: user.uid,
         ldl: parseFloat(labForm.ldl),
@@ -208,24 +152,15 @@ export default function DashboardPage() {
         triglycerides: parseFloat(labForm.tg),
         testDate: labForm.date,
         notes: labForm.notes,
-        ldlStatus:
-          parseFloat(labForm.ldl) > (profile?.targetLDL || 100)
-            ? "Above Target"
-            : "On Target",
+        ldlStatus: parseFloat(labForm.ldl) > (profile?.targetLDL || 100) ? "Above Target" : "On Target",
         createdAt: serverTimestamp(),
       });
+      console.log("[v0] Lab result saved successfully!");
       await loadLabResults();
       setLabModalOpen(false);
-      setLabForm({
-        ldl: "",
-        hdl: "",
-        tc: "",
-        tg: "",
-        date: new Date().toISOString().split("T")[0],
-        notes: "",
-      });
+      setLabForm({ ldl: "", hdl: "", tc: "", tg: "", date: new Date().toISOString().split("T")[0], notes: "" });
     } catch (error) {
-      console.error("[LipidLife] Error saving lab result:", error);
+      console.error("[v0] Error saving lab result:", error);
       const errorMsg = error instanceof Error ? error.message : "Unknown error";
       setLabError(`Error: ${errorMsg}`);
     }
@@ -330,9 +265,7 @@ export default function DashboardPage() {
                           : "bg-destructive/20 text-destructive"
                       }`}
                     >
-                      {latestLab.ldl <= profile.targetLDL
-                        ? "On target"
-                        : "Above target"}
+                      {latestLab.ldl <= profile.targetLDL ? "On target" : "Above target"}
                     </span>
                   )}
                 </CardContent>
@@ -404,18 +337,12 @@ export default function DashboardPage() {
             <Card>
               <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">
-                  <CardTitle className="text-sm font-semibold">
-                    Daily Checklist
-                  </CardTitle>
+                  <CardTitle className="text-sm font-semibold">Daily Checklist</CardTitle>
                   <span className="text-xs text-muted-foreground">
                     {completedTasks.length} of {DAILY_HABITS.length} done
                   </span>
                 </div>
-                <Progress
-                  value={taskProgress}
-                  className="h-1"
-                  indicatorClassName="bg-success"
-                />
+                <Progress value={taskProgress} className="h-1" indicatorClassName="bg-success" />
               </CardHeader>
               <CardContent className="p-0">
                 {DAILY_HABITS.map((task) => {
@@ -423,9 +350,7 @@ export default function DashboardPage() {
                   return (
                     <button
                       key={task.id}
-                      onClick={() =>
-                        handleCompleteTask(task.id, task.name, task.points)
-                      }
+                      onClick={() => handleCompleteTask(task.id, task.name, task.points)}
                       disabled={isCompleted}
                       className={`flex w-full items-center gap-3 border-t border-border px-4 py-3 text-left transition-opacity ${
                         isCompleted ? "opacity-60" : "hover:bg-muted/50"
@@ -442,9 +367,7 @@ export default function DashboardPage() {
                       </div>
                       <span
                         className={`flex-1 text-sm ${
-                          isCompleted
-                            ? "line-through text-muted-foreground"
-                            : ""
+                          isCompleted ? "line-through text-muted-foreground" : ""
                         }`}
                       >
                         {task.name}
@@ -481,9 +404,7 @@ export default function DashboardPage() {
                   id="ldl"
                   type="number"
                   value={labForm.ldl}
-                  onChange={(e) =>
-                    setLabForm({ ...labForm, ldl: e.target.value })
-                  }
+                  onChange={(e) => setLabForm({ ...labForm, ldl: e.target.value })}
                 />
               </div>
               <div className="flex flex-col gap-2">
@@ -492,9 +413,7 @@ export default function DashboardPage() {
                   id="hdl"
                   type="number"
                   value={labForm.hdl}
-                  onChange={(e) =>
-                    setLabForm({ ...labForm, hdl: e.target.value })
-                  }
+                  onChange={(e) => setLabForm({ ...labForm, hdl: e.target.value })}
                 />
               </div>
               <div className="flex flex-col gap-2">
@@ -503,9 +422,7 @@ export default function DashboardPage() {
                   id="tc"
                   type="number"
                   value={labForm.tc}
-                  onChange={(e) =>
-                    setLabForm({ ...labForm, tc: e.target.value })
-                  }
+                  onChange={(e) => setLabForm({ ...labForm, tc: e.target.value })}
                 />
               </div>
               <div className="flex flex-col gap-2">
@@ -514,9 +431,7 @@ export default function DashboardPage() {
                   id="tg"
                   type="number"
                   value={labForm.tg}
-                  onChange={(e) =>
-                    setLabForm({ ...labForm, tg: e.target.value })
-                  }
+                  onChange={(e) => setLabForm({ ...labForm, tg: e.target.value })}
                 />
               </div>
             </div>
@@ -526,9 +441,7 @@ export default function DashboardPage() {
                 id="date"
                 type="date"
                 value={labForm.date}
-                onChange={(e) =>
-                  setLabForm({ ...labForm, date: e.target.value })
-                }
+                onChange={(e) => setLabForm({ ...labForm, date: e.target.value })}
               />
             </div>
             <div className="flex flex-col gap-2">
@@ -536,15 +449,11 @@ export default function DashboardPage() {
               <Textarea
                 id="notes"
                 value={labForm.notes}
-                onChange={(e) =>
-                  setLabForm({ ...labForm, notes: e.target.value })
-                }
+                onChange={(e) => setLabForm({ ...labForm, notes: e.target.value })}
                 placeholder="Any notes about this test..."
               />
             </div>
-            {labError && (
-              <p className="text-sm text-destructive">{labError}</p>
-            )}
+            {labError && <p className="text-sm text-destructive">{labError}</p>}
             <Button onClick={handleSaveLab} disabled={labSaving}>
               {labSaving ? "Saving..." : "Save Result"}
             </Button>
